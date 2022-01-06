@@ -46,7 +46,7 @@ func TestPbft(t *testing.T) {
 }
 
 func runServer(processIdx, reqNum, reqSize, boostDelay int) {
-	ip := pbft.GetOutBoundIP()
+	ip := pbft.GetLocalIp()
 	nodeId := pbft.GetId(ip, processIdx)
 
 	fmt.Println("## node ip:", ip)

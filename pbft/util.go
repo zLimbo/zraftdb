@@ -33,7 +33,7 @@ func Bytes2I(data []byte, len int) int64 {
 	return result
 }
 
-func GetOutBoundIP() string {
+func GetLocalIp() string {
 	ipBytes, err := ioutil.ReadFile(kLocalIpFile)
 	if err == nil {
 		ip := string(ipBytes)

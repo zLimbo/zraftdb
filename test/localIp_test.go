@@ -8,7 +8,7 @@ import (
 )
 
 func TestLocalIP(t *testing.T) {
-	ip := pbft.GetOutBoundIP()
+	ip := pbft.GetLocalIp()
 	fmt.Println("local ip:", ip)
 
 	// ip = "127.0.0.1"

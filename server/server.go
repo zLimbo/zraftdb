@@ -49,7 +49,7 @@ func main() {
 }
 
 func runServer(processIdx, reqNum, boostDelay int) {
-	ip := pbft.GetOutBoundIP()
+	ip := pbft.GetLocalIp()
 	port := 10000 + processIdx
 	nodeId := pbft.GetId(ip, port)
 
