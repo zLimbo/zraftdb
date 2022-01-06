@@ -6,14 +6,6 @@ import (
 
 type MessageType int
 
-const (
-	mtRequest MessageType = iota
-	mtPrePrepare
-	mtPrepare
-	mtCommit
-	mtReply
-)
-
 type Message interface {
 	MsgType() MessageType
 	Seq() int64
@@ -43,9 +35,9 @@ type ReqMessage struct {
 	Req *Message `json:"req"`
 }
 
-func (msg *ReqMessage) showMsg(t *testing.T) {
-	t.Log(msg)
-}
+// func (msg *ReqMessage) showMsg(t *testing.T) {
+// 	t.Log(msg)
+// }
 
 func TestMessage(t *testing.T) {
 	// req := &ReqMessage{}

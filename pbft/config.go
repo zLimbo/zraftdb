@@ -51,7 +51,7 @@ var (
 
 func InitNodeAddr(ipNum, processNum int) error {
 
-	Ips = ReadIps("ips.txt")
+	Ips = ReadIps("./config/ips.txt")
 	fmt.Println("# Ips:", Ips)
 
 	NodeTable = make(map[int64]*Node)

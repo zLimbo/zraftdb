@@ -225,7 +225,7 @@ func (pbft *Pbft) signMsg(msg *Message) *SignMessage {
 func GenRsaKeys(ips []string, ipNum, processNum int) {
 	if !IsExist("./certs") {
 		fmt.Println("检测到还未生成公私钥目录，正在生成公私钥 ...")
-		err := os.Mkdir("certs", 0644)
+		err := os.Mkdir("certs", 0744)
 		if err != nil {
 			log.Panic(err)
 		}
@@ -233,15 +233,13 @@ func GenRsaKeys(ips []string, ipNum, processNum int) {
 			log.Panic(err)
 		}
 		for _, ip := range ips[:ipNum] {
-			idPrefix := Ip2I64(ip)
 			for i := 1; i <= processNum; i++ {
-
-				id := idPrefix*int64(100) + int64(i)
+				id := GetId(ip, i)
 				keyDir := "./certs/" + fmt.Sprint(id)
 				if !IsExist(keyDir) {
-					err := os.Mkdir(keyDir, 0644)
+					err := os.Mkdir(keyDir, 0744)
 					if err != nil {
-						log.Panic()
+						log.Panic(err)
 					}
 				}
 				pri, pub := GetKeyPair()

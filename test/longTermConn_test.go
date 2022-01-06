@@ -13,7 +13,7 @@ import (
 	"zpbft/pbft"
 )
 
-var priKey, pubKey = pbft.ReadKeyPair("../certs/1001100119301")
+var priKey, _ = pbft.ReadKeyPair("../lab/certs/1001100119301")
 
 const ByteLen = 4
 

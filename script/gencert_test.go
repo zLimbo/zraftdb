@@ -1,4 +1,4 @@
-package test
+package script
 
 import (
 	"fmt"
@@ -12,4 +12,5 @@ func TestGenCert(t *testing.T) {
 	fmt.Println("ips:", ips)
 
 	pbft.GenRsaKeys(ips, 19, 8)
+	fmt.Println("gen certs ok")
 }

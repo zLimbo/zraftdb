@@ -17,6 +17,7 @@
 /test/output
 build/
 bin/
+certs/
 
 # Ignore hidden files
 .*

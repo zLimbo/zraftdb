@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+const kLocalIpFile = "./config/local_ip.txt"
+
 func I2Bytes(num int64, len int) []byte {
 	result := make([]byte, len)
 	for i := 0; i < len; i++ {
@@ -32,11 +34,11 @@ func Bytes2I(data []byte, len int) int64 {
 }
 
 func GetOutBoundIP() string {
-	ipBytes, err := ioutil.ReadFile("../../local_ip.txt")
+	ipBytes, err := ioutil.ReadFile(kLocalIpFile)
 	if err == nil {
 		ip := string(ipBytes)
 		fmt.Println("** get ip from local_ip.txt, ip:", ip)
-		return ip
+		return strings.TrimSpace(ip)
 	}
 
 	tcpConn, err := net.Dial("udp", "8.8.8.8:53")
@@ -48,7 +50,7 @@ func GetOutBoundIP() string {
 	ip := strings.Split(localAddr.String(), ":")[0]
 	fmt.Println("** get ip from dial, ip:", ip)
 
-	if err = ioutil.WriteFile("../../local_ip.txt", []byte(ip), 0644); err != nil {
+	if err = ioutil.WriteFile(kLocalIpFile, []byte(ip), 0644); err != nil {
 		log.Panic(err)
 	}
 	return ip
@@ -79,21 +81,17 @@ func Addr2Id(addr string) int64 {
 }
 
 func GetId(ip string, port int) int64 {
-	idPrefix := Ip2I64(ip)
-	id := idPrefix*int64(100) + int64(port%100)
-	return id
-}
+	prefix := int64(0)
 
-func Ip2I64(ip string) int64 {
-	res := int64(0)
-
-	for _, span := range strings.Split(ip, ".") {
+	for _, span := range strings.Split(ip, ".")[2:] {
 		num, err := strconv.Atoi(span)
 		if err != nil {
 			log.Panic(err)
 			return 0
 		}
-		res = res*1000 + int64(num)
+		prefix = prefix*1000 + int64(num)
 	}
-	return res
+	
+	id := prefix*int64(100) + int64(port%100)
+	return id
 }
