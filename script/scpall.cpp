@@ -22,15 +22,21 @@ int main(int argc, char **argv) {
     while (fin >> ip) {
         if (ip.empty()) continue;
         ths.emplace_back([&, ip] {
+            auto start = chrono::steady_clock::now();
             char cmd[128];
             sprintf(cmd, "sshpass -p tongxing scp -r %s tongxing@%s:~/lab",
                     send_file, ip.c_str());
-            printf("cmd: %s (len=%ld)\n", cmd, strlen(cmd));
+
+            system(cmd)
             FILE *pp = popen(cmd, "r");  // build pipe
             if (!pp) {
                 printf("popen error, cmd: %s (len=%ld)\n", cmd, strlen(cmd));
+                return;
             }
             pclose(pp);
+            auto spend = chrono::duration_cast<chrono::milliseconds>(
+                chrono::steady_clock::now() - start);
+            printf("cmd: %s, spend time: %.2fs\n", cmd, spend.count() / 1000.0);
         });
     }
 
