@@ -38,7 +38,7 @@ func (client *Client) getReplyCert(seq int64) *ReplyCert {
 func (client *Client) handleReplyMsg() {
 	time.Sleep(time.Millisecond * time.Duration(KConfig.StartDelay))
 	client.startTime = time.Now()
-	for signMsg := range recvChan {
+	for signMsg := range signMsgChan {
 		// Info("handle reply:", msg)
 		node := GetNode(signMsg.Msg.NodeId)
 		if !VerifySignMsg(signMsg, node.pubKey) {

@@ -30,6 +30,7 @@ type Config struct {
 	BoostNum    int      `json:"boostNum"`
 	StartDelay  int      `json:"startDelay"`
 	RecvBufSize int      `json:"recvBufSize"`
+	LogStdout   bool     `json:"logStdout"`
 
 	Id2Node    map[int64]*Node
 	ClientNode *Node
@@ -74,6 +75,11 @@ func InitConfig(configFile string) {
 	// 设置本地IP和客户端
 	KConfig.ClientNode = NewNode(KConfig.ClientIp, KConfig.PortBase, nil, nil)
 	KConfig.LocalIp = GetLocalIp()
+
+	// 发送请求的节点数
+	if KConfig.BoostNum == -1 {
+		KConfig.BoostNum = KConfig.IpNum * KConfig.ProcessNum
+	}
 
 	Info("config ok. KConfig:", KConfig)
 }

@@ -15,7 +15,6 @@ func init() {
 func main() {
 	var configFile string
 	flag.StringVar(&configFile, "config", pbft.KConfigFile, "配置文件")
-
 	pbft.InitConfig(configFile)
 
 	if pbft.IsClient() { // 启动客户端

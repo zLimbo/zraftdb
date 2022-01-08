@@ -81,7 +81,7 @@ func (replica *Replica) Start() {
 }
 
 func (replica *Replica) handleMsg() {
-	for signMsg := range recvChan {
+	for signMsg := range signMsgChan {
 
 		node := GetNode(signMsg.Msg.NodeId)
 		start := time.Now()
@@ -95,7 +95,7 @@ func (replica *Replica) handleMsg() {
 		}
 
 		msg := signMsg.Msg
-		Info("+ handle start + batch seq:", replica.batchSeq, "recvChan size:", len(recvChan))
+		Info("+ handle start + batch seq:", replica.batchSeq, "recvChan size:", len(signMsgChan))
 		//Info("recv msg{", msg.MsgType, msg.Seq, msg.NodeId, msg.Timestamp, "}")
 		switch msg.MsgType {
 		case MtProposal:
@@ -116,8 +116,8 @@ func (replica *Replica) handleMsg() {
 			replica.stat.prepareNum,
 			replica.stat.commitNum,
 			replica.stat.replyNum,
-			len(recvChan),
-			noConnCnt)
+			len(signMsgChan),
+			notConnCnt)
 		Info("[recv pre-prepare num:", replica.curBatch.prePrepareMsgNum, "]")
 	}
 }
@@ -328,7 +328,11 @@ func (replica *Replica) maybeSendReply(msgCert *MsgCert) {
 		Timestamp: time.Now().UnixNano(),
 	}
 	signMsg := replica.signMsg(replyMsg)
-	KConfig.ClientNode.connMgr.sendChan <- signMsg
+	signMsgBytes, err := json.Marshal(signMsg)
+	if err != nil {
+		Panic("json.Marshal(signMsg), err: %v", err)
+	}
+	KConfig.ClientNode.connMgr.sendChan <- signMsgBytes
 	// go PostJson(ClientUrl+"/getReply", jsonMsg)
 	msgCert.SendReply = HasSend
 
@@ -388,12 +392,15 @@ func (replica *Replica) clearCert(msgCert *MsgCert) {
 }
 
 func (replica *Replica) broadcast(signMsg *SignMessage, msgCert *MsgCert) {
-
+	signMsgBytes, err := json.Marshal(signMsg)
+	if err != nil {
+		Panic("json.Marshal(signMsg), err: %v", err)
+	}
 	for _, node := range KConfig.Id2Node {
 		if node.id == replica.node.id {
 			continue
 		}
-		node.connMgr.sendChan <- signMsg
+		node.connMgr.sendChan <- signMsgBytes
 	}
 }
 

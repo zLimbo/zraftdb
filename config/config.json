@@ -18,5 +18,6 @@
     "reqNum": 20,
     "boostNum": -1,
     "startDelay": 3000,
-    "recvBufSize": 1024
+    "recvBufSize": 1024,
+    "logStdout": true
 }

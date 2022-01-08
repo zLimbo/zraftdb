@@ -1,0 +1,13 @@
+{
+    "peerIps": [
+        "192.168.192.137"
+    ],
+    "clientIp": "10.11.1.207",
+    "ipNum": 1,
+    "portBase": 10000,
+    "processNum": 4,
+    "reqNum": 0,
+    "boostNum": -1,
+    "startDelay": 3000,
+    "recvBufSize": 1024
+}

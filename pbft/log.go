@@ -134,8 +134,8 @@ func (pbft *Replica) showTime(msgCert *MsgCert) {
 	Info("avgTimeCommit:\t%0.6fs\n", avgTimeCommit/math.Pow10(9))
 
 	Info("\n+++ chan len ++++")
-	Info("recvChan:", len(recvChan))
-	Info("connectChan:", len(connectChan))
+	Info("recvChan:", len(signMsgChan))
+	Info("connectChan:", len(waitConnChan))
 	Info("pbft.node.connMgr.recvChan:", len(pbft.node.connMgr.recvChan))
 	Info("pbft.node.connMgr.sendChan:", len(pbft.node.connMgr.sendChan))
 
@@ -153,7 +153,7 @@ func (pbft *Replica) status() {
 			pbft.stat.commitNum,
 			pbft.stat.replyNum)
 		Info("[recv pre-prepare num:", pbft.curBatch.prePrepareMsgNum, "]")
-		Info("send error num:", sendErrorCount)
+		Info("send error num:", sendFailCount)
 		Info("goroutine num:", runtime.NumGoroutine())
 
 		Info("\n+++ conn status")
@@ -161,14 +161,14 @@ func (pbft *Replica) status() {
 			if id == pbft.node.id {
 				continue
 			}
-			Info(node.GetAddr() + " connect")
+			Info(node.addr + " connect")
 			if node.connMgr.getTcpConn() != nil {
 				Info(" success")
 			} else {
 				Info(" failed")
 			}
 		}
-		log.Print("client " + KConfig.ClientNode.GetAddr() + " connect")
+		log.Print("client " + KConfig.ClientNode.addr + " connect")
 		if KConfig.ClientNode.connMgr.getTcpConn() != nil {
 			Info(" success")
 		} else {
@@ -230,8 +230,8 @@ func (pbft *Replica) status() {
 		Info("avgTimeCommit:\t%0.6fs\n", avgTimeCommit/math.Pow10(9))
 
 		Info("\n+++ chan len ++++")
-		Info("recvChan:", len(recvChan))
-		Info("connectChan:", len(connectChan))
+		Info("recvChan:", len(signMsgChan))
+		Info("connectChan:", len(waitConnChan))
 		Info("pbft.node.connMgr.recvChan:", len(pbft.node.connMgr.recvChan))
 		Info("pbft.node.connMgr.sendChan:", len(pbft.node.connMgr.sendChan))
 

@@ -11,16 +11,16 @@ import (
 )
 
 const (
-	MsgSizeByteSize = 4
+	sendLenByteSize = 4
 	IdByteSize      = 8
-	TryBuildConnNum = 10
+	TryBuildConnNum = 3
 )
 
 var (
-	recvChan       = make(chan *SignMessage, ChanSize)
-	connectChan    = make(chan *Node, ChanSize)
-	sendErrorCount = 0
-	noConnCnt      = 0
+	signMsgChan   = make(chan *SignMessage, ChanSize)
+	waitConnChan  = make(chan *Node, ChanSize)
+	sendFailCount = 0
+	notConnCnt    = 0
 )
 
 type ConnMgr struct {
@@ -28,7 +28,7 @@ type ConnMgr struct {
 	tcpConn  net.Conn
 	recvBuf  []byte
 	recvChan chan []byte
-	sendChan chan *SignMessage
+	sendChan chan []byte
 	mutex    sync.Mutex
 }
 
@@ -38,7 +38,7 @@ func NewConnMgr(node *Node) *ConnMgr {
 		tcpConn:  nil,
 		recvBuf:  make([]byte, 0),
 		recvChan: make(chan []byte, 1),
-		sendChan: make(chan *SignMessage, ChanSize),
+		sendChan: make(chan []byte, ChanSize),
 		mutex:    sync.Mutex{},
 	}
 	go connMgr.handleMsg()
@@ -95,102 +95,92 @@ func (connMgr *ConnMgr) write(buf []byte) (int, error) {
 }
 
 func (connMgr *ConnMgr) send() {
-	for signMsg := range connMgr.sendChan {
-		signMsgBytes, err := json.Marshal(signMsg)
-		if err != nil {
-			Panic("json.Marshal(signMsg), err: %v", err)
-		}
-		sz := len(signMsgBytes)
-		szBytes := I2Bytes(int64(sz), MsgSizeByteSize)
-		data := append(szBytes, signMsgBytes...)
+	for bytes := range connMgr.sendChan {
 
-		_, err = connMgr.write(data)
-		if err != nil {
-			Info("err:", err)
-			sendErrorCount++
-			connMgr.closeTcpConn()
-			connMgr.sendChan <- signMsg
+		sz := len(bytes)
+		szBytes := I2Bytes(int64(sz), sendLenByteSize)
+		data := append(szBytes, bytes...)
+
+		if connMgr.getTcpConn() == nil {
+			connMgr.sendChan <- bytes
 			return
 		}
-		//Info("send", n, "bytes, msg type:", signMsg.Msg.MsgType, "msg seq:", signMsg.Msg.Seq)
+
+		_, err := connMgr.write(data)
+		if err != nil {
+			Warn("connMgr.write(data), err: %v", err)
+			sendFailCount++
+			connMgr.closeTcpConn()
+			connMgr.sendChan <- bytes
+			return
+		}
 	}
 }
 
 func (connMgr *ConnMgr) recv() {
-
 	for {
-		// connMgr.mutex.Lock()
-		// defer connMgr.mutex.Unlock()
-		if connMgr.tcpConn == nil {
+		buf := make([]byte, KConfig.RecvBufSize)
+		if connMgr.getTcpConn() == nil {
 			return
 		}
-		buf := make([]byte, KConfig.RecvBufSize)
 		n, err := connMgr.read(buf)
 		if err != nil {
-			sendErrorCount++
-			Info("[close] node:", connMgr.node.id, " num:", sendErrorCount)
+			Warn("connMgr.read(buf), err: %v", err)
 			connMgr.closeTcpConn()
-			//if err == io.EOF && connMgr.node == KConfig.ClientNode {
-			//	Info("====> Exit")
-			//	os.Exit(-1)
-			//}
 			return
 		}
-
 		if n == 0 {
 			runtime.Gosched()
 		}
-
 		connMgr.recvChan <- buf[:n]
 	}
 }
 
 func (connMgr *ConnMgr) handleMsg() {
 	for buf := range connMgr.recvChan {
-		// connMgr.mutex.Lock()
-		// defer connMgr.mutex.Unlock()
 		connMgr.recvBuf = append(connMgr.recvBuf, buf...)
 		buf = nil
 		for {
-			if len(connMgr.recvBuf) < MsgSizeByteSize {
+			if len(connMgr.recvBuf) < sendLenByteSize {
 				break
 			}
-			size := Bytes2I(connMgr.recvBuf[:MsgSizeByteSize], MsgSizeByteSize)
-			if len(connMgr.recvBuf) < MsgSizeByteSize+int(size) {
+			size := Bytes2I(connMgr.recvBuf[:sendLenByteSize], sendLenByteSize)
+			if len(connMgr.recvBuf) < sendLenByteSize+int(size) {
 				break
 			}
-			signMsg := new(SignMessage)
-			err := json.Unmarshal(connMgr.recvBuf[MsgSizeByteSize:MsgSizeByteSize+size], signMsg)
+			var signMsg SignMessage
+			err := json.Unmarshal(connMgr.recvBuf[sendLenByteSize:sendLenByteSize+size], &signMsg)
 			if err != nil {
-				Panic("err: %v", err)
+				Panic("json.Unmarshal(...), err: %v", err)
 			}
-			recvChan <- signMsg
-			connMgr.recvBuf = connMgr.recvBuf[MsgSizeByteSize+size:]
+			signMsgChan <- &signMsg
+			connMgr.recvBuf = connMgr.recvBuf[sendLenByteSize+size:]
 		}
 	}
 }
 
 func (replica *Replica) keep() {
+	go replica.ConnStatus()
 	for {
-		noConnCnt = 0
+		notConnCnt = 0
 		if KConfig.ClientNode.connMgr.getTcpConn() == nil {
-			noConnCnt++
-			connectChan <- KConfig.ClientNode
+			notConnCnt++
+			waitConnChan <- KConfig.ClientNode
 		}
 		for id, node := range KConfig.Id2Node {
 			if id == replica.node.id {
 				continue
 			}
 			if node.connMgr.getTcpConn() == nil {
-				noConnCnt++
-				connectChan <- node
+				notConnCnt++
+				waitConnChan <- node
 			}
 		}
-		Info("noConnCnt:", noConnCnt)
-		if noConnCnt != 0 {
-			time.Sleep(time.Second * 2)
+		Info("current not connect count: %d", notConnCnt)
+		if notConnCnt != 0 {
+			time.Sleep(time.Second * 1)
 		} else {
-			time.Sleep(time.Second * 8)
+			time.Sleep(time.Second * 5)
 		}
 	}
 }
@@ -202,7 +192,7 @@ func (replica *Replica) listen() {
 		Panic("net.Listen(\"tcp4\", addr), err: %v", err)
 	}
 	defer listener.Close()
-	Info(replica.node.GetAddr() + "listen...")
+	Info(replica.node.addr + "listen...")
 	for {
 		tcpConn, err := listener.Accept()
 		if err != nil {
@@ -242,14 +232,14 @@ func (replica *Replica) listenBuildConn(tcpConn net.Conn) {
 }
 
 func (replica *Replica) connect() {
-	for node := range connectChan {
+	for node := range waitConnChan {
 		if node.connMgr.getTcpConn() != nil {
 			continue
 		}
-		Info("dial ", node.GetAddr(), "...")
-		tcpConn, err := net.Dial("tcp4", node.GetAddr())
+		Info("dial %s ...", node.addr)
+		tcpConn, err := net.Dial("tcp4", node.addr)
 		if err != nil {
-			Info("dial failed, conn:", node.connMgr.getTcpConn())
+			Info("dial %s failed", node.addr)
 			continue
 		}
 		replica.connectBuildConn(tcpConn, node)
@@ -278,4 +268,20 @@ func (replica *Replica) connectBuildConn(tcpConn net.Conn, node *Node) {
 		return
 	}
 	tcpConn.Close()
+}
+
+func (replica *Replica) ConnStatus() {
+	time.Sleep(3 * time.Second)
+	for {
+		Info("==== connect status ====")
+		for _, node := range KConfig.Id2Node {
+			if node.connMgr.getTcpConn() != nil {
+				Info("== [connect ok] %s", node.addr)
+			} else {
+				Warn("== [connect fail] %s", node.addr)
+			}
+		}
+		Info("====")
+		time.Sleep(10 * time.Second)
+	}
 }
