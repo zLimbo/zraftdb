@@ -2,13 +2,10 @@ package pbft
 
 import (
 	"io/ioutil"
-	"log"
 	"net"
 	"strconv"
 	"strings"
 )
-
-const kLocalIpFile = "./config/local_ip.txt"
 
 func I2Bytes(num int64, len int) []byte {
 	result := make([]byte, len)
@@ -33,24 +30,22 @@ func Bytes2I(data []byte, len int) int64 {
 }
 
 func GetLocalIp() string {
-	ipBytes, err := ioutil.ReadFile(kLocalIpFile)
+	ipBytes, err := ioutil.ReadFile(KLocalIpFile)
 	if err == nil {
-		ip := string(ipBytes)
-		log.Println("** get ip from local_ip.txt, ip:", ip)
-		return strings.TrimSpace(ip)
+		ip := strings.TrimSpace(string(ipBytes))
+		return ip
 	}
 
 	tcpConn, err := net.Dial("udp", "8.8.8.8:53")
 	if err != nil {
-		log.Panic(err)
+		Panic("err: %v", err)
 	}
 	localAddr := tcpConn.LocalAddr().(*net.UDPAddr)
-	log.Println("localAddr:", localAddr.String())
 	ip := strings.Split(localAddr.String(), ":")[0]
-	log.Println("** get ip from dial, ip:", ip)
 
-	if err = ioutil.WriteFile(kLocalIpFile, []byte(ip), 0644); err != nil {
-		log.Panic(err)
+	err = ioutil.WriteFile(KLocalIpFile, []byte(ip), 0644)
+	if err != nil {
+		Panic("err: %v", err)
 	}
 	return ip
 }
@@ -59,12 +54,12 @@ func ReadIps(path string) []string {
 
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
-		log.Panic(err)
+		Panic("err: %v", err)
 	}
 
 	ips := strings.Split(string(data), "\n")
 	// if len(ips) == 1 {
-	// 	log.Panic("read Ips error!")
+	// 	Panic("read KConfig.PeerIps error!")
 	// }
 	return ips
 }
@@ -74,7 +69,7 @@ func Addr2Id(addr string) int64 {
 	ip, portStr := list[0], list[1]
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
-		log.Panic(err)
+		Panic("err: %v", err)
 	}
 	return GetId(ip, port)
 }
@@ -85,7 +80,7 @@ func GetId(ip string, port int) int64 {
 	for _, span := range strings.Split(ip, ".")[2:] {
 		num, err := strconv.Atoi(span)
 		if err != nil {
-			log.Panic(err)
+			Panic("err: %v", err)
 			return 0
 		}
 		prefix = prefix*1000 + int64(num)

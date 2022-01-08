@@ -3,7 +3,6 @@ package pbft
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"time"
 )
@@ -19,7 +18,7 @@ func NewBatch() *Batch {
 	return batch
 }
 
-type PbftStat struct {
+type Stat struct {
 	requestNum, prePrepareNum, prepareNum, commitNum, replyNum int64
 	prePrepareTime, prepareTime, commitTime                    int64
 	batchTimeOkNum                                             int64
@@ -32,16 +31,16 @@ type PbftStat struct {
 	times                                                      []int64
 }
 
-func NewPbftStat() *PbftStat {
-	stat := &PbftStat{
+func NewStat() *Stat {
+	stat := &Stat{
 		times: make([]int64, 0),
 	}
 	return stat
 }
 
-type Pbft struct {
+type Replica struct {
 	node        *Node
-	stat        *PbftStat
+	stat        *Stat
 	msgCertPool map[int64]*MsgCert
 
 	boostChan chan int64
@@ -50,10 +49,10 @@ type Pbft struct {
 	curBatch  *Batch
 }
 
-func NewPbft(id int64) *Pbft {
-	pbft := &Pbft{
+func NewReplica(id int64) *Replica {
+	pbft := &Replica{
 		node:        GetNode(id),
-		stat:        NewPbftStat(),
+		stat:        NewStat(),
 		msgCertPool: make(map[int64]*MsgCert),
 		boostChan:   make(chan int64, ChanSize),
 		batchPool:   make(map[int64]*Batch),
@@ -65,79 +64,79 @@ func NewPbft(id int64) *Pbft {
 	return pbft
 }
 
-func (pbft *Pbft) Start(reqNum, boostDelay int) {
+func (replica *Replica) Start() {
 
-	go pbft.connect()
-	go pbft.listen()
-	go pbft.keep()
-	go pbft.handleMsg()
+	go replica.connect()
+	go replica.listen()
+	go replica.keep()
+	go replica.handleMsg()
 	//go pbft.status()
 	//go pbft.flowStatistics()
 
-	if GetIndex(pbft.node.ip) < BoostNum {
-		go pbft.boostReq(reqNum, boostDelay)
+	if KConfig.ReqNum > 0 && GetIndex(replica.node.ip) < KConfig.BoostNum {
+		go replica.boostReq()
 	}
 
 	select {}
 }
 
-func (pbft *Pbft) handleMsg() {
+func (replica *Replica) handleMsg() {
 	for signMsg := range recvChan {
 
 		node := GetNode(signMsg.Msg.NodeId)
 		start := time.Now()
 		if !VerifySignMsg(signMsg, node.pubKey) {
-			log.Panic("#### verify failed!")
+			Panic("#### verify failed!")
 		}
 		verifyTime := time.Since(start)
 		if signMsg.Msg.MsgType == MtPrePrepare {
-			pbft.stat.verifyTimeSum += verifyTime
-			pbft.stat.verifyTimeCnt++
+			replica.stat.verifyTimeSum += verifyTime
+			replica.stat.verifyTimeCnt++
 		}
 
 		msg := signMsg.Msg
-		log.Println("+ handle start + batch seq:", pbft.batchSeq, "recvChan size:", len(recvChan))
-		//log.Println("recv msg{", msg.MsgType, msg.Seq, msg.NodeId, msg.Timestamp, "}")
+		Info("+ handle start + batch seq:", replica.batchSeq, "recvChan size:", len(recvChan))
+		//Info("recv msg{", msg.MsgType, msg.Seq, msg.NodeId, msg.Timestamp, "}")
 		switch msg.MsgType {
 		case MtProposal:
-			pbft.handleProposal(msg)
+			replica.handleProposal(msg)
 		case MtRequest:
-			pbft.handleRequest(msg)
+			replica.handleRequest(msg)
 		case MtPrePrepare:
-			pbft.handlePrePrepare(msg)
+			replica.handlePrePrepare(msg)
 		case MtPrepare:
-			pbft.handlePrepare(msg)
+			replica.handlePrepare(msg)
 		case MtCommit:
-			pbft.handleCommit(msg)
+			replica.handleCommit(msg)
 		}
 
-		log.Printf("[req=%d, pre-prepare=%d, prepare=%d, commit=%d, reply=%d, recvchan_size=%d, noConnCnt=%d]\n",
-			pbft.stat.requestNum,
-			pbft.stat.prePrepareNum,
-			pbft.stat.prepareNum,
-			pbft.stat.commitNum,
-			pbft.stat.replyNum,
+		Info("[req=%d, pre-prepare=%d, prepare=%d, commit=%d, reply=%d, recvchan_size=%d, noConnCnt=%d]\n",
+			replica.stat.requestNum,
+			replica.stat.prePrepareNum,
+			replica.stat.prepareNum,
+			replica.stat.commitNum,
+			replica.stat.replyNum,
 			len(recvChan),
 			noConnCnt)
-		log.Println("[recv pre-prepare num:", pbft.curBatch.prePrepareMsgNum, "]")
+		Info("[recv pre-prepare num:", replica.curBatch.prePrepareMsgNum, "]")
 	}
 }
 
-func (pbft *Pbft) getMsgCert(seq int64) *MsgCert {
-	msgCert, ok := pbft.msgCertPool[seq]
+func (replica *Replica) getMsgCert(seq int64) *MsgCert {
+	msgCert, ok := replica.msgCertPool[seq]
 	if !ok {
 		msgCert = NewMsgCert()
-		pbft.msgCertPool[seq] = msgCert
+		replica.msgCertPool[seq] = msgCert
 		msgCert.Seq = seq
 	}
 	return msgCert
 }
 
-func (pbft *Pbft) handleRequest(msg *Message) {
-	log.Println("<node handleRequestMsg> msg seq=", msg.Seq, "tx num", len(msg.Txs))
-	msgCert := pbft.getMsgCert(msg.Seq)
+func (replica *Replica) handleRequest(msg *Message) {
+	Info("<node handleRequestMsg> msg seq=", msg.Seq, "tx num", len(msg.Txs))
+	msgCert := replica.getMsgCert(msg.Seq)
 	if msgCert.Req != nil {
-		log.Printf("The request(seq=%d) has been accepted!\n", msg.Seq)
+		Info("The request(seq=%d) has been accepted!\n", msg.Seq)
 		return
 	}
 
@@ -148,18 +147,18 @@ func (pbft *Pbft) handleRequest(msg *Message) {
 	msgCert.Time = time.Now().UnixNano()
 	msgCert.PrePrepareTime = time.Now().UnixNano()
 
-	pbft.curBatch.times[1] = time.Now()
+	replica.curBatch.times[1] = time.Now()
 
 	LogStageStart(fmt.Sprintf("seq=%d pre-prepare", msgCert.Seq))
 
-	pbft.sendPrePrepare(msgCert)
+	replica.sendPrePrepare(msgCert)
 }
 
-func (pbft *Pbft) handlePrePrepare(msg *Message) {
-	log.Println("<node handlePrePrepareMsg> msg seq=", msg.Seq, "tx num", len(msg.Txs))
-	msgCert := pbft.getMsgCert(msg.Seq)
+func (replica *Replica) handlePrePrepare(msg *Message) {
+	Info("<node handlePrePrepareMsg> msg seq=", msg.Seq, "tx num", len(msg.Txs))
+	msgCert := replica.getMsgCert(msg.Seq)
 	if msgCert.PrePrepare != nil {
-		log.Printf("The pre-prepare(seq=%d) has been accepted!\n", msg.Seq)
+		Info("The pre-prepare(seq=%d) has been accepted!\n", msg.Seq)
 		return
 	}
 	if msgCert.SendPrepare == HasSend {
@@ -174,31 +173,31 @@ func (pbft *Pbft) handlePrePrepare(msg *Message) {
 	msgCert.PrepareTime = time.Now().UnixNano()
 	LogStageStart(fmt.Sprintf("seq=%d prepare", msgCert.Seq))
 
-	pbft.sendPrepare(msgCert)
+	replica.sendPrepare(msgCert)
 }
 
-func (pbft *Pbft) handlePrepare(msg *Message) {
-	msgCert := pbft.getMsgCert(msg.Seq)
+func (replica *Replica) handlePrepare(msg *Message) {
+	msgCert := replica.getMsgCert(msg.Seq)
 	if msgCert.SendCommit == HasSend {
 		return
 	}
-	log.Printf("<node handlePrepareMsg> msg seq=%d nodeId=%d\n", msg.Seq, msg.NodeId)
-	log.Println("\t\033[32mtime:\033[0m", time.Duration(time.Now().UnixNano()-msgCert.PrePrepareTime))
-	pbft.recvPrepareMsg(msgCert, msg)
-	pbft.maybeSendCommit(msgCert)
+	Info("<node handlePrepareMsg> msg seq=%d nodeId=%d\n", msg.Seq, msg.NodeId)
+	Info("\t\033[32mtime:\033[0m", time.Duration(time.Now().UnixNano()-msgCert.PrePrepareTime))
+	replica.recvPrepareMsg(msgCert, msg)
+	replica.maybeSendCommit(msgCert)
 }
 
-func (pbft *Pbft) handleCommit(msg *Message) {
-	msgCert := pbft.getMsgCert(msg.Seq)
+func (replica *Replica) handleCommit(msg *Message) {
+	msgCert := replica.getMsgCert(msg.Seq)
 	if msgCert.SendReply == HasSend {
 		return
 	}
-	log.Printf("<node handleCommitMsg> msg seq=%d nodeId=%d\n", msg.Seq, msg.NodeId)
-	pbft.recvCommitMsg(msgCert, msg)
-	pbft.maybeSendReply(msgCert)
+	Info("<node handleCommitMsg> msg seq=%d nodeId=%d\n", msg.Seq, msg.NodeId)
+	replica.recvCommitMsg(msgCert, msg)
+	replica.maybeSendReply(msgCert)
 }
 
-func (pbft *Pbft) recvPrepareMsg(msgCert *MsgCert, msg *Message) {
+func (replica *Replica) recvPrepareMsg(msgCert *MsgCert, msg *Message) {
 	// count := 1
 	// for _, preMsg := range msgCert.Prepares {
 	// 	if preMsg.NodeId == msg.NodeId {
@@ -210,13 +209,13 @@ func (pbft *Pbft) recvPrepareMsg(msgCert *MsgCert, msg *Message) {
 	// }
 	msgCert.Prepares = append(msgCert.Prepares, msg)
 	count := len(msgCert.Prepares)
-	log.Printf("same prepare msg count=%d\n", count)
-	if count >= 2*f {
+	Info("same prepare msg count=%d\n", count)
+	if count >= 2*KConfig.FalultNum {
 		msgCert.SendCommit = WaitSend
 	}
 }
 
-func (pbft *Pbft) recvCommitMsg(msgCert *MsgCert, msg *Message) {
+func (replica *Replica) recvCommitMsg(msgCert *MsgCert, msg *Message) {
 	// count := 1
 	// for _, preMsg := range msgCert.Commits {
 	// 	if preMsg.NodeId == msg.NodeId {
@@ -228,24 +227,24 @@ func (pbft *Pbft) recvCommitMsg(msgCert *MsgCert, msg *Message) {
 	// }
 	msgCert.Commits = append(msgCert.Commits, msg)
 	count := len(msgCert.Commits)
-	log.Printf("same commit msg count=%d\n", count)
-	if count >= 2*f+1 {
+	Info("same commit msg count=%d\n", count)
+	if count >= 2*KConfig.FalultNum+1 {
 		msgCert.SendReply = WaitSend
 	}
 }
 
-func (pbft *Pbft) sendPrePrepare(msgCert *MsgCert) {
+func (replica *Replica) sendPrePrepare(msgCert *MsgCert) {
 	prePrepareMsg := &Message{
 		MsgType:   MtPrePrepare,
 		Seq:       msgCert.Seq,
-		NodeId:    pbft.node.id,
+		NodeId:    replica.node.id,
 		Timestamp: time.Now().UnixNano(),
 		Req:       msgCert.Req,
 	}
-	signMsg := pbft.signMsg(prePrepareMsg)
-	pbft.broadcast(signMsg, msgCert)
+	signMsg := replica.signMsg(prePrepareMsg)
+	replica.broadcast(signMsg, msgCert)
 	msgCert.SendPrePrepare = HasSend
-	log.Println("[pre-prepare] msg has been sent.")
+	Info("[pre-prepare] msg has been sent.")
 
 	msgCert.PrePrepareTime = time.Now().UnixNano() - msgCert.PrePrepareTime
 	LogStageEnd(fmt.Sprintf("seq=%d pre-prepare", msgCert.Seq))
@@ -253,37 +252,37 @@ func (pbft *Pbft) sendPrePrepare(msgCert *MsgCert) {
 	msgCert.PrepareTime = time.Now().UnixNano()
 	msgCert.SendPrepare = HasSend
 	LogStageStart(fmt.Sprintf("seq=%d prepare", msgCert.Seq))
-	pbft.maybeSendCommit(msgCert)
+	replica.maybeSendCommit(msgCert)
 }
 
-func (pbft *Pbft) sendPrepare(msgCert *MsgCert) {
+func (replica *Replica) sendPrepare(msgCert *MsgCert) {
 	prepareMsg := &Message{
 		MsgType:   MtPrepare,
 		Seq:       msgCert.Seq,
-		NodeId:    pbft.node.id,
+		NodeId:    replica.node.id,
 		Timestamp: time.Now().UnixNano(),
 	}
-	pbft.recvPrepareMsg(msgCert, prepareMsg)
-	signMsg := pbft.signMsg(prepareMsg)
-	log.Println("<broadcast> prepare")
-	pbft.broadcast(signMsg, msgCert)
+	replica.recvPrepareMsg(msgCert, prepareMsg)
+	signMsg := replica.signMsg(prepareMsg)
+	Info("<broadcast> prepare")
+	replica.broadcast(signMsg, msgCert)
 	msgCert.SendPrepare = HasSend
-	pbft.stat.prePrepareNum++
+	replica.stat.prePrepareNum++
 
 	//pbft.curBatch.counts[2]++
 	//if pbft.curBatch.counts[2] == 2*f+1 {
 	//	pbft.curBatch.times[2] = time.Now()
 	//}
 
-	log.Println("[prepare] msg has been sent.")
-	pbft.maybeSendCommit(msgCert)
+	Info("[prepare] msg has been sent.")
+	replica.maybeSendCommit(msgCert)
 }
 
-func (pbft *Pbft) maybeSendCommit(msgCert *MsgCert) {
+func (replica *Replica) maybeSendCommit(msgCert *MsgCert) {
 	if msgCert.SendPrepare != HasSend || msgCert.SendCommit != WaitSend {
 		return
 	}
-	pbft.stat.prepareNum++
+	replica.stat.prepareNum++
 
 	msgCert.PrepareTime = time.Now().UnixNano() - msgCert.PrepareTime
 	LogStageEnd(fmt.Sprintf("seq=%d prepare", msgCert.Seq))
@@ -299,71 +298,71 @@ func (pbft *Pbft) maybeSendCommit(msgCert *MsgCert) {
 	commitMsg := &Message{
 		MsgType:   MtCommit,
 		Seq:       msgCert.Seq,
-		NodeId:    pbft.node.id,
+		NodeId:    replica.node.id,
 		Timestamp: time.Now().UnixNano(),
 	}
 
-	pbft.recvCommitMsg(msgCert, commitMsg)
-	signMsg := pbft.signMsg(commitMsg)
-	pbft.broadcast(signMsg, msgCert)
+	replica.recvCommitMsg(msgCert, commitMsg)
+	signMsg := replica.signMsg(commitMsg)
+	replica.broadcast(signMsg, msgCert)
 	msgCert.SendCommit = HasSend
-	log.Println("[commit] msg has been sent.")
-	pbft.maybeSendReply(msgCert)
+	Info("[commit] msg has been sent.")
+	replica.maybeSendReply(msgCert)
 }
 
-func (pbft *Pbft) maybeSendReply(msgCert *MsgCert) {
+func (replica *Replica) maybeSendReply(msgCert *MsgCert) {
 	if msgCert.SendCommit != HasSend || msgCert.SendReply != WaitSend {
 		return
 	}
 
 	msgCert.Time = time.Now().UnixNano() - msgCert.Time
 	msgCert.CommitTime = time.Now().UnixNano() - msgCert.CommitTime
-	pbft.stat.commitNum++
+	replica.stat.commitNum++
 	LogStageEnd(fmt.Sprintf("seq=%d commit", msgCert.Seq))
 
 	LogStageStart(fmt.Sprintf("seq=%d reply", msgCert.Seq))
 	replyMsg := &Message{
 		MsgType:   MtReply,
 		Seq:       msgCert.Seq,
-		NodeId:    pbft.node.id,
+		NodeId:    replica.node.id,
 		Timestamp: time.Now().UnixNano(),
 	}
-	signMsg := pbft.signMsg(replyMsg)
-	ClientNode.netMgr.sendChan <- signMsg
+	signMsg := replica.signMsg(replyMsg)
+	KConfig.ClientNode.connMgr.sendChan <- signMsg
 	// go PostJson(ClientUrl+"/getReply", jsonMsg)
 	msgCert.SendReply = HasSend
 
-	log.Printf("[reply] msg has been sent, seq=%d\n", msgCert.Seq)
-	LogStageEnd(fmt.Sprintf("seq=%d reply reply_count=%d", msgCert.Seq, pbft.stat.replyNum))
-	pbft.stat.replyNum++
+	Info("[reply] msg has been sent, seq=%d\n", msgCert.Seq)
+	LogStageEnd(fmt.Sprintf("seq=%d reply reply_count=%d", msgCert.Seq, replica.stat.replyNum))
+	replica.stat.replyNum++
 
-	pbft.finalize(msgCert)
+	replica.finalize(msgCert)
 }
 
-func (pbft *Pbft) finalize(msgCert *MsgCert) {
+func (replica *Replica) finalize(msgCert *MsgCert) {
 	// pbft.showTime(msgCert)
 
-	pbft.curBatch.counts[4]++
-	if pbft.curBatch.counts[4] == BoostNum {
-		pbft.curBatch.times[4] = time.Now()
-		LogStageEnd(fmt.Sprintf("Batch %d", pbft.batchSeq))
+	replica.curBatch.counts[4]++
+	if replica.curBatch.counts[4] == KConfig.BoostNum {
+		replica.curBatch.times[4] = time.Now()
+		LogStageEnd(fmt.Sprintf("Batch %d", replica.batchSeq))
 
-		pbft.showBatchTime()
+		replica.showBatchTime()
 		//pbft.exec(BoostNum)
-		pbft.curBatch = &Batch{}
-		pbft.curBatch.times[0] = time.Now()
-		pbft.batchSeq += 1
-		pbft.batchPool[pbft.batchSeq] = pbft.curBatch
-		pbft.boostChan <- pbft.batchSeq
+		replica.curBatch = &Batch{}
+		replica.curBatch.times[0] = time.Now()
+		replica.batchSeq += 1
+		replica.batchPool[replica.batchSeq] = replica.curBatch
+		replica.boostChan <- replica.batchSeq
 
-		LogStageStart(fmt.Sprintf("Batch %d", pbft.batchSeq))
+		LogStageStart(fmt.Sprintf("Batch %d", replica.batchSeq))
 	}
 
-	pbft.showTime(msgCert)
-	pbft.clearCert(msgCert)
+	replica.showTime(msgCert)
+	replica.clearCert(msgCert)
 }
 
-func (pbft *Pbft) exec(num int) {
+func (replica *Replica) exec(num int) {
 	LogStageStart("Exec")
 	start := time.Now()
 	sum := int64(0)
@@ -372,96 +371,96 @@ func (pbft *Pbft) exec(num int) {
 			sum += i
 		}
 	}
-	log.Println("Exec result:", sum)
+	Info("Exec result:", sum)
 	LogStageEnd("Exec")
 	execTime := time.Since(start)
-	pbft.stat.execTimeSum += execTime
-	pbft.stat.execTimeCnt++
+	replica.stat.execTimeSum += execTime
+	replica.stat.execTimeCnt++
 
-	log.Println("Exec time:", execTime)
+	Info("Exec time:", execTime)
 }
 
-func (pbft *Pbft) clearCert(msgCert *MsgCert) {
+func (replica *Replica) clearCert(msgCert *MsgCert) {
 	msgCert.Req = nil
 	msgCert.PrePrepare = nil
 	msgCert.Prepares = nil
 	msgCert.Commits = nil
 }
 
-func (pbft *Pbft) broadcast(signMsg *SignMessage, msgCert *MsgCert) {
+func (replica *Replica) broadcast(signMsg *SignMessage, msgCert *MsgCert) {
 
-	for _, node := range NodeTable {
-		if node.id == pbft.node.id {
+	for _, node := range KConfig.Id2Node {
+		if node.id == replica.node.id {
 			continue
 		}
-		node.netMgr.sendChan <- signMsg
+		node.connMgr.sendChan <- signMsg
 	}
 }
 
-func (pbft *Pbft) boostReq(reqNum, boostDelay int) {
+func (replica *Replica) boostReq() {
 
-	if reqNum <= 0 {
+	if KConfig.ReqNum <= 0 {
 		return
 	}
 
 	req := &Message{
 		MsgType:   MtRequest,
 		Seq:       1,
-		NodeId:    pbft.node.id,
+		NodeId:    replica.node.id,
 		Timestamp: time.Now().UnixNano(),
 		Txs:       &BatchTx{},
 	}
-	SignRequest(req, pbft.node.priKey)
+	SignRequest(req, replica.node.priKey)
 	jsonMsg, err := json.Marshal(req)
 	if err != nil {
-		log.Println(err)
+		Warn("err: %v", err)
 	}
-	log.Println("req sz =", float64(len(jsonMsg))/MBSize)
+	Info("req sz =", float64(len(jsonMsg))/MBSize)
 
-	log.Println("# boost num =", reqNum)
-	log.Println("# boostSeqChan len:", len(pbft.boostChan))
+	Info("# boost num =", KConfig.ReqNum)
+	Info("# boostSeqChan len:", len(replica.boostChan))
 	//time.Sleep(time.Duration(boostDelay) * time.Millisecond)
 
-	pbft.boostChan <- 0
+	replica.boostChan <- 0
 
-	LogStageStart(fmt.Sprintf("Batch %d", pbft.batchSeq))
-	prefix := pbft.node.id * 10000
+	LogStageStart(fmt.Sprintf("Batch %d", replica.batchSeq))
+	prefix := replica.node.id * 10000
 
-	time.Sleep(time.Millisecond * ClientDelay)
+	time.Sleep(time.Millisecond * time.Duration(KConfig.StartDelay))
 	start := time.Now()
-	for batchSeq := range pbft.boostChan {
-		if batchSeq == int64(reqNum) {
+	for batchSeq := range replica.boostChan {
+		if batchSeq == int64(KConfig.ReqNum) {
 			break
 		}
-		log.Println("# batchSeq:", batchSeq)
+		Info("# batchSeq:", batchSeq)
 
 		req.Seq = prefix + batchSeq
 		req.Timestamp = time.Now().UnixNano()
-		msgCert := pbft.getMsgCert(req.Seq)
+		msgCert := replica.getMsgCert(req.Seq)
 		msgCert.Req = req
 		msgCert.SendPrePrepare = WaitSend
-		pbft.sendPrePrepare(msgCert)
+		replica.sendPrePrepare(msgCert)
 		//signMsg := pbft.signMsg(req)
 		//// pbft.RecvChan.RequestMsgChan <- reqMsg
 		//recvChan <- signMsg
 	}
-	log.Println("\033[32m[req]\033[0m req finish, reqNum:", reqNum, "spend time:", time.Since(start))
+	Info("\033[32m[req]\033[0m req finish, KConfig.ReqNum:", KConfig.ReqNum, "spend time:", time.Since(start))
 
 	time.Sleep(time.Second * 60)
-	for _, node := range NodeTable {
-		node.netMgr.closeTcpConn()
+	for _, node := range KConfig.Id2Node {
+		node.connMgr.closeTcpConn()
 	}
-	log.Println("===> Exit")
+	Info("===> Exit")
 	os.Exit(1)
 }
 
-func (pbft *Pbft) handleProposal(msg *Message) {
-	msgCert := pbft.getMsgCert(msg.Seq)
+func (replica *Replica) handleProposal(msg *Message) {
+	msgCert := replica.getMsgCert(msg.Seq)
 
-	pbft.sendRequest(msgCert)
+	replica.sendRequest(msgCert)
 }
 
-func (pbft *Pbft) sendRequest(msgCert *MsgCert) {
+func (replica *Replica) sendRequest(msgCert *MsgCert) {
 	//req := &Message{
 	//	MsgType:   MtRequest,
 	//	Seq:       msgCert.Seq,

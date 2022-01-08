@@ -5,18 +5,18 @@ import (
 )
 
 type Node struct {
-	id     int64
-	ip     string
-	port   int
-	priKey []byte
-	pubKey []byte
-	netMgr *NetMgr
+	id      int64
+	ip      string
+	port    int
+	priKey  []byte
+	pubKey  []byte
+	connMgr *ConnMgr
 }
 
 func NewNode(ip string, port int, priKey, pubKey []byte) *Node {
 	id := GetId(ip, port)
 	node := &Node{id, ip, port, priKey, pubKey, nil}
-	node.netMgr = NewNetMgr(node)
+	node.connMgr = NewConnMgr(node)
 	return node
 }
 
@@ -26,7 +26,7 @@ func (node *Node) GetAddr() string {
 
 //func (node *Node) getDialAddr() string {
 //	if node.dialIdx == 100 {
-//		log.Panicln("node.dailIdx == 100, please check network!")
+//		Panic("node.dailIdx == 100, please check network!")
 //	}
 //	node.dialIdx++
 //	dialPort := node.port + node.dialIdx

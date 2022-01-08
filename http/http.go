@@ -40,13 +40,13 @@ func index(w http.ResponseWriter, req *http.Request) {
 	var msg Msg
 	err := json.NewDecoder(req.Body).Decode(&msg)
 	if err != nil {
-		// log.Panicln(err)
+		// Panic("err: %v", err)
 		return
 	}
 	if RecvMap[msg.Ip] {
 		return
 	}
-	// log.Println("recv:", msg)
+	// Info("recv:", msg)
 	RecvMap[msg.Ip] = true
 }
 
@@ -93,14 +93,14 @@ func dial() {
 	msg := &Msg{Ip: LocalIp}
 	jsonMsg, err := json.Marshal(msg)
 	if err != nil {
-		log.Panicln(err)
+		pbft.Panic("err: %v", err)
 	}
 	for {
 		for _, ip := range Ips {
 			if ip == LocalIp {
 				continue
 			}
-			// log.Printf("send to %s\n", ip)
+			// Info("send to %s\n", ip)
 			buf := bytes.NewBuffer(jsonMsg)
 			_, err := cli.Post("http://"+ip+":"+strconv.Itoa(Port), "application/json", buf)
 			if err != nil {
@@ -123,11 +123,11 @@ func main() {
 		http.HandleFunc("/", index)
 		err := http.ListenAndServe("0.0.0.0:"+strconv.Itoa(Port), nil)
 		if err != nil {
-			log.Panic(err)
+			pbft.Panic("err: %v", err)
 		}
 	}()
 
-	// log.Println("Ips: ", Ips)
+	// Info("Ips: ", Ips)
 	time.Sleep(3 * time.Second)
 
 	go dial()

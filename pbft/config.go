@@ -4,120 +4,98 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
+)
+
+const (
+	MBSize        = 1024 * 1024
+	BatchTxNum    = 4096 / 1
+	TxSize        = 256
+	ChanSize      = 10000
+	ExecTime      = 0
+	ExecNum       = 1e8
+	HeartbeatTime = 2
+	FlowSize      = 10 * MBSize
+	KConfigFile   = "./config/config.json"
+	KCertsDir     = "./certs"
+	KLocalIpFile  = "./config/local_ip.txt"
 )
 
 type Config struct {
-	PeerIps  []string `json:"peerIps"`
-	ClientIp string   `json:"clientIp"`
-	// IpNum      int      `json:"ipNum"`
-	// ProcessNum int      `json:"processNum"`
-	// ReqNum     int      `json:"reqNum"`
-	// StartDelay int      `json:"startDelay"`
-}
+	PeerIps     []string `json:"peerIps"`
+	ClientIp    string   `json:"clientIp"`
+	IpNum       int      `json:"ipNum"`
+	PortBase    int      `json:"portBase"`
+	ProcessNum  int      `json:"processNum"`
+	ReqNum      int      `json:"reqNum"`
+	BoostNum    int      `json:"boostNum"`
+	StartDelay  int      `json:"startDelay"`
+	RecvBufSize int      `json:"recvBufSize"`
 
-const kConfigFile = "config/config.json"
+	Id2Node    map[int64]*Node
+	ClientNode *Node
+	PeerIds    []int64
+	LocalIp    string
+	FalultNum  int
+}
 
 var KConfig Config
 
-const (
-	delayTime   = 30 * 100000
-	batchNum    = 4
-	ClientDelay = 5 * 1000
+func InitConfig(configFile string) {
 
-	from       = 101
-	to         = 102
-	MBSize     = 1024 * 1024
-	BatchTxNum = 4096 / 1
-	TxSize     = 256
-
-	ChanSize     = 10000
-	sendTaskSize = 256
-
-	ExecTime = 0
-	ExecNum  = 1e8
-
-	HeartbeatTime = 2
-
-	PortBase = 10000
-
-	// ClientIp   = "127.0.0.1"
-	//ClientIp = "10.11.1.201"
-	//ClientIp = "10.11.1.211"
-	//ClientIp = "10.11.1.193"
-	// ClientIp   = "10.11.1.207"
-	// ClientPort = PortBase
-
-	flowSize = 10 * MBSize
-)
-
-var (
-	f          int
-	BoostNum   int
-	BoostDelay = 5 * 1000
-	NodeNum    int
-
-	NodeTable map[int64]*Node
-	Ips       []string
-	Ids       []int64
-
-	ClientNode *Node
-)
-
-func InitConfig(ipNum, processNum int) {
-
-	jsonBytes, err := ioutil.ReadFile(kConfigFile)
+	// 读取 json
+	jsonBytes, err := ioutil.ReadFile(configFile)
 	if err != nil {
-		log.Panicln(err)
+		Panic("read %s failed.", configFile)
 	}
-	// log.Println("| config: ", string(jsonBytes))
+	Info("config: ", string(jsonBytes))
 	err = json.Unmarshal(jsonBytes, &KConfig)
 	if err != nil {
-		log.Panicln(err)
+		Panic("json.Unmarshal(jsonBytes, &KConfig) err: %v", err)
 	}
 
-	Ips = KConfig.PeerIps
-	NodeTable = make(map[int64]*Node)
-
-	ClientNode = NewNode(KConfig.ClientIp, PortBase, nil, nil)
-
-	for _, ip := range Ips[:ipNum] {
-		for i := 1; i <= processNum; i++ {
-			port := PortBase + i
+	// 配置节点ip, port, 公私钥
+	KConfig.PeerIps = KConfig.PeerIps[:KConfig.IpNum]
+	KConfig.Id2Node = make(map[int64]*Node)
+	for _, ip := range KConfig.PeerIps {
+		for i := 0; i < KConfig.ProcessNum; i++ {
+			port := KConfig.PortBase + 1 + i
 			id := GetId(ip, port)
-			keyDir := "./certs/" + fmt.Sprint(id)
+			keyDir := KCertsDir + "/" + fmt.Sprint(id)
 			priKey, pubKey := ReadKeyPair(keyDir)
 
-			NodeTable[id] = NewNode(ip, port, priKey, pubKey)
-			Ids = append(Ids, id)
+			KConfig.Id2Node[id] = NewNode(ip, port, priKey, pubKey)
+			KConfig.PeerIds = append(KConfig.PeerIds, id)
 		}
 	}
 
-	NodeNum = len(NodeTable)
-	f = (NodeNum - 1) / 3
+	// 计算容错数
+	KConfig.FalultNum = (len(KConfig.Id2Node) - 1) / 3
 
-	log.Println("| network server peers:")
-	for _, node := range NodeTable {
-		log.Printf("| node id: %d | node addr: %s", node.id, node.GetAddr())
-	}
-	log.Println("| client addr:", ClientNode.GetAddr())
-	log.Printf("| node num: %d | f: %d", len(NodeTable), f)
+	// 设置本地IP和客户端
+	KConfig.ClientNode = NewNode(KConfig.ClientIp, KConfig.PortBase, nil, nil)
+	KConfig.LocalIp = GetLocalIp()
+
+	Info("config ok. KConfig:", KConfig)
+}
+
+func IsClient() bool {
+	return KConfig.LocalIp == KConfig.ClientIp
 }
 
 func GetNode(id int64) *Node {
-	if NodeTable == nil {
-		log.Panic("NodeTable is not initialized!")
+	if KConfig.Id2Node == nil {
+		Panic("KConfig.Id2Node is not initialized!")
 	}
-	node, ok := NodeTable[id]
+	node, ok := KConfig.Id2Node[id]
 	if !ok {
-		log.Panicf("The node of this ID(%d) does not exist!", id)
+		Panic("The node of this ID(%d) does not exist!", id)
 	}
 	return node
 }
 
 func GetIndex(ip string) int {
-	for idx, ip2 := range Ips {
-		if ip == ip2 {
+	for idx, ip1 := range KConfig.PeerIps {
+		if ip == ip1 {
 			return idx
 		}
 	}

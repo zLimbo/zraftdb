@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"os"
 	"strconv"
 	"time"
@@ -51,21 +50,21 @@ func IsExist(path string) bool {
 		if os.IsNotExist(err) {
 			return false
 		}
-		log.Println(err)
+		Warn("err: %v", err)
 		return false
 	}
 	return true
 }
 
 func ReadKeyPair(keyDir string) ([]byte, []byte) {
-	log.Println("read key pair from", keyDir)
+	Info("read key pair from", keyDir)
 	priKey, err := ioutil.ReadFile(keyDir + "/rsa.pri.pem")
 	if err != nil {
-		log.Panic(err)
+		Panic("err: %v", err)
 	}
 	pubKey, err := ioutil.ReadFile(keyDir + "/rsa.pub.pem")
 	if err != nil {
-		log.Panic(err)
+		Panic("err: %v", err)
 	}
 	return priKey, pubKey
 }
@@ -80,13 +79,13 @@ func RsaSignWithSha256(data []byte, keyBytes []byte) []byte {
 	}
 	privateKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 	if err != nil {
-		log.Println("ParsePKCS8PrivateKey err", err)
+		Info("ParsePKCS8PrivateKey err", err)
 		panic(err)
 	}
 
 	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hashed)
 	if err != nil {
-		log.Printf("Error from signing: %s\n", err)
+		Info("Error from signing: %s\n", err)
 		panic(err)
 	}
 
@@ -124,7 +123,7 @@ func Sha256Digest(msg interface{}) []byte {
 func JsonMarshal(msg interface{}) []byte {
 	msgBytes, err := json.Marshal(msg)
 	if err != nil {
-		log.Panic(err)
+		Panic("err: %v", err)
 	}
 	return msgBytes
 }
@@ -156,8 +155,8 @@ func VerifyPrePrepareSignMsg(signMsg *SignMessage, pubKey []byte) bool {
 		}
 		verifyTime += time.Since(start)
 	}
-	log.Println("digestTime:", digestTime)
-	log.Println("verifyTime:", verifyTime)
+	Info("digestTime:", digestTime)
+	Info("verifyTime:", verifyTime)
 	return true
 }
 
@@ -186,8 +185,8 @@ func SignMsg(msg *Message, priKey []byte) *SignMessage {
 //		signTime += time.Since(start)
 //		signMsg.TxSigns = append(signMsg.TxSigns, sign)
 //	}
-//	log.Println("digestTime:", digestTime)
-//	log.Println("signTime:", signTime)
+//	Info("digestTime:", digestTime)
+//	Info("signTime:", signTime)
 //	return signMsg
 //}
 
@@ -206,31 +205,31 @@ func SignRequest(msg *Message, priKey []byte) *Message {
 		signTime += time.Since(start)
 		msg.TxSigns = append(msg.TxSigns, sign)
 	}
-	log.Println("digestTime:", digestTime)
-	log.Println("signTime:", signTime)
+	Info("digestTime:", digestTime)
+	Info("signTime:", signTime)
 	return msg
 }
 
-func (pbft *Pbft) signMsg(msg *Message) *SignMessage {
+func (replica *Replica) signMsg(msg *Message) *SignMessage {
 	start := time.Now()
-	signMsg := SignMsg(msg, pbft.node.priKey)
+	signMsg := SignMsg(msg, replica.node.priKey)
 	signTime := time.Since(start)
 	if msg.MsgType == MtPrePrepare {
-		pbft.stat.signTimeSum += signTime
-		pbft.stat.signTimeCnt++
+		replica.stat.signTimeSum += signTime
+		replica.stat.signTimeCnt++
 	}
 	return signMsg
 }
 
 func GenRsaKeys(ips []string, ipNum, processNum int) {
 	if !IsExist("./certs") {
-		log.Println("检测到还未生成公私钥目录，正在生成公私钥 ...")
+		Info("检测到还未生成公私钥目录，正在生成公私钥 ...")
 		err := os.Mkdir("certs", 0744)
 		if err != nil {
-			log.Panic(err)
+			Panic("err: %v", err)
 		}
 		if err != nil {
-			log.Panic(err)
+			Panic("err: %v", err)
 		}
 		for _, ip := range ips[:ipNum] {
 			for i := 1; i <= processNum; i++ {
@@ -239,14 +238,14 @@ func GenRsaKeys(ips []string, ipNum, processNum int) {
 				if !IsExist(keyDir) {
 					err := os.Mkdir(keyDir, 0744)
 					if err != nil {
-						log.Panic(err)
+						Panic("err: %v", err)
 					}
 				}
 				pri, pub := GetKeyPair()
 				priFilePath := keyDir + "/rsa.pri.pem"
 				priFile, err := os.OpenFile(priFilePath, os.O_RDWR|os.O_CREATE, 0644)
 				if err != nil {
-					log.Panic(err)
+					Panic("err: %v", err)
 				}
 				defer priFile.Close()
 				priFile.Write(pri)
@@ -254,7 +253,7 @@ func GenRsaKeys(ips []string, ipNum, processNum int) {
 				pubFilePath := keyDir + "/rsa.pub.pem"
 				pubFile, err := os.OpenFile(pubFilePath, os.O_RDWR|os.O_CREATE, 0644)
 				if err != nil {
-					log.Panic(err)
+					Panic("err: %v", err)
 				}
 				defer pubFile.Close()
 				pubFile.Write(pub)
@@ -263,12 +262,12 @@ func GenRsaKeys(ips []string, ipNum, processNum int) {
 				addrFilePath := keyDir + "/" + addr + ".addr.txt"
 				addrFile, err := os.OpenFile(addrFilePath, os.O_RDWR|os.O_CREATE, 0644)
 				if err != nil {
-					log.Panic(err)
+					Panic("err: %v", err)
 				}
 				defer addrFile.Close()
 				addrFile.WriteString(ip + ":" + strconv.Itoa(8000+i))
 			}
 		}
-		log.Println("已为节点们生成RSA公私钥")
+		Info("已为节点们生成RSA公私钥")
 	}
 }

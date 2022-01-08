@@ -11,5 +11,12 @@
         "10.11.7.74",
         "10.11.7.75"
     ],
-    "clientIp": "10.11.1.207"
+    "clientIp": "10.11.1.207",
+    "ipNum": 10,
+    "portBase": 10000,
+    "processNum": 1,
+    "reqNum": 20,
+    "boostNum": -1,
+    "startDelay": 3000,
+    "recvBufSize": 1024
 }

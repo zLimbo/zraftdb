@@ -3,7 +3,6 @@ package test
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"strconv"
@@ -48,7 +47,7 @@ func client() {
 
 	//conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		log.Panic(err)
+		pbft.Panic("err: %v", err)
 	}
 
 	for i := 0; i < 1; i++ {
@@ -142,7 +141,7 @@ func recvMsg() {
 			//signMsg := new(pbft.SignMessage)
 			//err := json.Unmarshal(Mgr.buf[ByteLen:ByteLen+size], signMsg)
 			//if err != nil {
-			//	log.Panic(err)
+			//	Panic("err: %v", err)
 			//}
 			//fmt.Println("signMsg Seq:", signMsg.Msg.Seq)
 			//result := pbft.VerifySignMsg(signMsg, pubKey)
@@ -167,13 +166,13 @@ func server() {
 	// listen, err := net.Listen("tcp", addr)
 	listen, err := net.Listen("tcp4", addr)
 	if err != nil {
-		log.Panic(err)
+		pbft.Panic("err: %v", err)
 	}
 	defer listen.Close()
 
 	conn, err := listen.Accept()
 	if err != nil {
-		log.Panic(err)
+		pbft.Panic("err: %v", err)
 	}
 
 	fmt.Println("#### conn")

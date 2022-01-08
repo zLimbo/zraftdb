@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"testing"
+	"zpbft/pbft"
 )
 
 type Config struct {
@@ -19,15 +20,15 @@ type Config struct {
 func TestJson(t *testing.T) {
 	text, err := ioutil.ReadFile("../config/config.json")
 	if err != nil {
-		log.Panicln(err)
+		pbft.Panic("err: %v", err)
 	}
 	fmt.Println("text:", string(text))
 	var config Config
 	err = json.Unmarshal([]byte(text), &config)
 	if err != nil {
-		log.Panicln(err)
+		pbft.Panic("err: %v", err)
 	}
 	fmt.Println(config)
-	log.Println("abc")
+	pbft.Info("abc")
 	log.Print("def")
 }
