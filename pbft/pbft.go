@@ -96,8 +96,8 @@ func (pbft *Pbft) handleMsg() {
 		}
 
 		msg := signMsg.Msg
-		fmt.Println("+ handle start + batch seq:", pbft.batchSeq, "recvChan size:", len(recvChan))
-		//fmt.Println("recv msg{", msg.MsgType, msg.Seq, msg.NodeId, msg.Timestamp, "}")
+		log.Println("+ handle start + batch seq:", pbft.batchSeq, "recvChan size:", len(recvChan))
+		//log.Println("recv msg{", msg.MsgType, msg.Seq, msg.NodeId, msg.Timestamp, "}")
 		switch msg.MsgType {
 		case MtProposal:
 			pbft.handleProposal(msg)
@@ -111,7 +111,7 @@ func (pbft *Pbft) handleMsg() {
 			pbft.handleCommit(msg)
 		}
 
-		fmt.Printf("[req=%d, pre-prepare=%d, prepare=%d, commit=%d, reply=%d, recvchan_size=%d, noConnCnt=%d]\n",
+		log.Printf("[req=%d, pre-prepare=%d, prepare=%d, commit=%d, reply=%d, recvchan_size=%d, noConnCnt=%d]\n",
 			pbft.stat.requestNum,
 			pbft.stat.prePrepareNum,
 			pbft.stat.prepareNum,
@@ -119,7 +119,7 @@ func (pbft *Pbft) handleMsg() {
 			pbft.stat.replyNum,
 			len(recvChan),
 			noConnCnt)
-		fmt.Println("[recv pre-prepare num:", pbft.curBatch.prePrepareMsgNum, "]")
+		log.Println("[recv pre-prepare num:", pbft.curBatch.prePrepareMsgNum, "]")
 	}
 }
 
@@ -183,7 +183,7 @@ func (pbft *Pbft) handlePrepare(msg *Message) {
 		return
 	}
 	log.Printf("<node handlePrepareMsg> msg seq=%d nodeId=%d\n", msg.Seq, msg.NodeId)
-	fmt.Println("\t\033[32mtime:\033[0m", time.Duration(time.Now().UnixNano() - msgCert.PrePrepareTime))
+	log.Println("\t\033[32mtime:\033[0m", time.Duration(time.Now().UnixNano()-msgCert.PrePrepareTime))
 	pbft.recvPrepareMsg(msgCert, msg)
 	pbft.maybeSendCommit(msgCert)
 }
@@ -372,13 +372,13 @@ func (pbft *Pbft) exec(num int) {
 			sum += i
 		}
 	}
-	fmt.Println("Exec result:", sum)
+	log.Println("Exec result:", sum)
 	LogStageEnd("Exec")
 	execTime := time.Since(start)
 	pbft.stat.execTimeSum += execTime
 	pbft.stat.execTimeCnt++
 
-	fmt.Println("Exec time:", execTime)
+	log.Println("Exec time:", execTime)
 }
 
 func (pbft *Pbft) clearCert(msgCert *MsgCert) {
@@ -416,10 +416,10 @@ func (pbft *Pbft) boostReq(reqNum, boostDelay int) {
 	if err != nil {
 		log.Println(err)
 	}
-	fmt.Println("req sz =", float64(len(jsonMsg))/MBSize)
+	log.Println("req sz =", float64(len(jsonMsg))/MBSize)
 
-	fmt.Println("# boost num =", reqNum)
-	fmt.Println("# boostSeqChan len:", len(pbft.boostChan))
+	log.Println("# boost num =", reqNum)
+	log.Println("# boostSeqChan len:", len(pbft.boostChan))
 	//time.Sleep(time.Duration(boostDelay) * time.Millisecond)
 
 	pbft.boostChan <- 0
@@ -433,7 +433,7 @@ func (pbft *Pbft) boostReq(reqNum, boostDelay int) {
 		if batchSeq == int64(reqNum) {
 			break
 		}
-		fmt.Println("# batchSeq:", batchSeq)
+		log.Println("# batchSeq:", batchSeq)
 
 		req.Seq = prefix + batchSeq
 		req.Timestamp = time.Now().UnixNano()
@@ -445,13 +445,13 @@ func (pbft *Pbft) boostReq(reqNum, boostDelay int) {
 		//// pbft.RecvChan.RequestMsgChan <- reqMsg
 		//recvChan <- signMsg
 	}
-	fmt.Println("\033[32m[req]\033[0m req finish, reqNum:", reqNum, "spend time:", time.Since(start))
+	log.Println("\033[32m[req]\033[0m req finish, reqNum:", reqNum, "spend time:", time.Since(start))
 
 	time.Sleep(time.Second * 60)
 	for _, node := range NodeTable {
 		node.netMgr.closeTcpConn()
 	}
-	fmt.Println("===> Exit")
+	log.Println("===> Exit")
 	os.Exit(1)
 }
 

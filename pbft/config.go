@@ -1,9 +1,24 @@
 package pbft
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 )
+
+type Config struct {
+	PeerIps  []string `json:"peerIps"`
+	ClientIp string   `json:"clientIp"`
+	// IpNum      int      `json:"ipNum"`
+	// ProcessNum int      `json:"processNum"`
+	// ReqNum     int      `json:"reqNum"`
+	// StartDelay int      `json:"startDelay"`
+}
+
+const kConfigFile = "config/config.json"
+
+var KConfig Config
 
 const (
 	delayTime   = 30 * 100000
@@ -30,8 +45,8 @@ const (
 	//ClientIp = "10.11.1.201"
 	//ClientIp = "10.11.1.211"
 	//ClientIp = "10.11.1.193"
-	ClientIp   = "10.11.1.207"
-	ClientPort = PortBase
+	// ClientIp   = "10.11.1.207"
+	// ClientPort = PortBase
 
 	flowSize = 10 * MBSize
 )
@@ -46,15 +61,25 @@ var (
 	Ips       []string
 	Ids       []int64
 
-	ClientNode = NewNode(ClientIp, ClientPort, nil, nil)
+	ClientNode *Node
 )
 
-func InitNodeAddr(ipNum, processNum int) error {
+func InitConfig(ipNum, processNum int) {
 
-	Ips = ReadIps("./config/ips.txt")
-	fmt.Println("# Ips:", Ips)
+	jsonBytes, err := ioutil.ReadFile(kConfigFile)
+	if err != nil {
+		log.Panicln(err)
+	}
+	// log.Println("| config: ", string(jsonBytes))
+	err = json.Unmarshal(jsonBytes, &KConfig)
+	if err != nil {
+		log.Panicln(err)
+	}
 
+	Ips = KConfig.PeerIps
 	NodeTable = make(map[int64]*Node)
+
+	ClientNode = NewNode(KConfig.ClientIp, PortBase, nil, nil)
 
 	for _, ip := range Ips[:ipNum] {
 		for i := 1; i <= processNum; i++ {
@@ -71,16 +96,12 @@ func InitNodeAddr(ipNum, processNum int) error {
 	NodeNum = len(NodeTable)
 	f = (NodeNum - 1) / 3
 
-	fmt.Println("# network server peers:")
+	log.Println("| network server peers:")
 	for _, node := range NodeTable {
-		fmt.Printf("# node id: %d, node addr: %s\n", node.id, node.getAddr())
+		log.Printf("| node id: %d | node addr: %s", node.id, node.GetAddr())
 	}
-	fmt.Println("# client:", ClientNode.getAddr())
-	fmt.Printf("\n# node num: %d\tf: %d\n", len(NodeTable), f)
-
-	fmt.Println()
-
-	return nil
+	log.Println("| client addr:", ClientNode.GetAddr())
+	log.Printf("| node num: %d | f: %d", len(NodeTable), f)
 }
 
 func GetNode(id int64) *Node {

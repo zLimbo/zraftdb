@@ -3,7 +3,6 @@ package pbft
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -92,15 +91,15 @@ func (netMgr *NetMgr) setTcpConn(tcpConn net.Conn) bool {
 	netMgr.mutex.Lock()
 	defer netMgr.mutex.Unlock()
 	if netMgr.tcpConn != nil {
-		fmt.Println("connect alread established!")
+		log.Println("connect alread established!")
 		return false
 	}
 	netMgr.tcpConn = tcpConn
 
-	fmt.Println("###")
-	fmt.Println("# local:", tcpConn.LocalAddr())
-	fmt.Println("# remote:", tcpConn.RemoteAddr())
-	fmt.Println("### connect success!")
+	log.Println("###")
+	log.Println("# local:", tcpConn.LocalAddr())
+	log.Println("# remote:", tcpConn.RemoteAddr())
+	log.Println("### connect success!")
 
 	if netMgr.tcpConn != nil {
 		go netMgr.send()
@@ -113,7 +112,7 @@ func (netMgr *NetMgr) closeTcpConn() {
 	netMgr.mutex.Lock()
 	defer netMgr.mutex.Unlock()
 	if netMgr.tcpConn == nil {
-		fmt.Println("connect nil!")
+		log.Println("connect nil!")
 		return
 	}
 	netMgr.tcpConn.Close()
@@ -163,7 +162,7 @@ func (netMgr *NetMgr) send() {
 			return
 		}
 		netMgr.flowLog.out(int64(len(data)))
-		//fmt.Println("send", n, "bytes, msg type:", signMsg.Msg.MsgType, "msg seq:", signMsg.Msg.Seq)
+		//log.Println("send", n, "bytes, msg type:", signMsg.Msg.MsgType, "msg seq:", signMsg.Msg.Seq)
 	}
 }
 
@@ -182,7 +181,7 @@ func (netMgr *NetMgr) recv() {
 			log.Println("[close] node:", netMgr.node.id, " num:", sendErrorCount)
 			netMgr.closeTcpConn()
 			//if err == io.EOF && netMgr.node == ClientNode {
-			//	fmt.Println("====> Exit")
+			//	log.Println("====> Exit")
 			//	os.Exit(-1)
 			//}
 			return
@@ -236,7 +235,7 @@ func (pbft *Pbft) keep() {
 				connectChan <- node
 			}
 		}
-		fmt.Println("#### noConnCnt:", noConnCnt)
+		log.Println("#### noConnCnt:", noConnCnt)
 		if noConnCnt != 0 {
 			time.Sleep(time.Second * 2)
 		} else {
@@ -252,7 +251,7 @@ func (pbft *Pbft) listen() {
 		log.Panic(err)
 	}
 	defer listener.Close()
-	fmt.Println(pbft.node.getAddr(), "server listen...")
+	log.Println(pbft.node.GetAddr(), "server listen...")
 	for {
 		tcpConn, err := listener.Accept()
 		if err != nil {
@@ -292,8 +291,8 @@ func (pbft *Pbft) connect() {
 		if node.netMgr.getTcpConn() != nil {
 			continue
 		}
-		fmt.Println("### connect ", node.getAddr(), "...")
-		tcpConn, err := net.Dial("tcp4", node.getAddr())
+		log.Println("### connect ", node.GetAddr(), "...")
+		tcpConn, err := net.Dial("tcp4", node.GetAddr())
 		if err != nil {
 			log.Println(err)
 			log.Println("conn:", node.netMgr.getTcpConn())
@@ -353,12 +352,12 @@ func (pbft *Pbft) flowStatistics() {
 			outPeekSpeed = outGapSpeed
 		}
 
-		fmt.Println("\n===== flow log =====")
-		fmt.Printf("[in]\ttotal: %0.4fMB\ttotal_speed: %0.4fMB/s\tgap: %0.4fMB\tspeed: %0.4fMB/s\tpeek: %0.4fMB/s\n",
+		log.Println("\n===== flow log =====")
+		log.Printf("[in]\ttotal: %0.4fMB\ttotal_speed: %0.4fMB/s\tgap: %0.4fMB\tspeed: %0.4fMB/s\tpeek: %0.4fMB/s\n",
 			float64(inNewSize)/MBSize, inTotalSpeed, float64(inGap)/MBSize, inGapSpeed, inPeekSpeed)
-		fmt.Printf("[out]\ttotal: %0.4fMB\ttotal_speed: %0.4fMB/s\tgap: %0.4fMB\tspeed: %0.4fMB/s\tpeek: %0.4fMB/s\n",
+		log.Printf("[out]\ttotal: %0.4fMB\ttotal_speed: %0.4fMB/s\tgap: %0.4fMB\tspeed: %0.4fMB/s\tpeek: %0.4fMB/s\n",
 			float64(outNewSize)/MBSize, outTotalSpeed, float64(outGap)/MBSize, outGapSpeed, outPeekSpeed)
-		fmt.Println()
+		log.Println()
 
 		inSize, outSize = inNewSize, outNewSize
 	}

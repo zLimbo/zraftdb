@@ -20,7 +20,7 @@ func NewNode(ip string, port int, priKey, pubKey []byte) *Node {
 	return node
 }
 
-func (node *Node) getAddr() string {
+func (node *Node) GetAddr() string {
 	return node.ip + ":" + strconv.Itoa(node.port)
 }
 

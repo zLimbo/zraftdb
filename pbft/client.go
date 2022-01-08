@@ -1,7 +1,7 @@
 package pbft
 
 import (
-	"fmt"
+	"log"
 	"time"
 )
 
@@ -40,15 +40,15 @@ func (client *Client) handleReplyMsg() {
 	time.Sleep(time.Millisecond * ClientDelay)
 	client.startTime = time.Now()
 	for signMsg := range recvChan {
-		// fmt.Println("handle reply:", msg)
+		// log.Println("handle reply:", msg)
 		node := GetNode(signMsg.Msg.NodeId)
 		if !VerifySignMsg(signMsg, node.pubKey) {
-			fmt.Println("#### verify failed!")
+			log.Println("#### verify failed!")
 			continue
 		}
 		msg := signMsg.Msg
 		if msg.MsgType != MtReply {
-			fmt.Println("it's not reply!")
+			log.Println("it's not reply!")
 			continue
 		}
 		cert := client.getReplyCert(msg.Seq)
@@ -66,13 +66,13 @@ func (client *Client) handleReplyMsg() {
 			// }
 		}
 		cert.Replys = append(cert.Replys, msg)
-		fmt.Printf("\033[32m[Reply]\033[0m msg seq=%d node_id=%d, count=%d\n", msg.Seq, msg.NodeId, count)
+		log.Printf("\033[32m[Reply]\033[0m msg seq=%d node_id=%d, count=%d\n", msg.Seq, msg.NodeId, count)
 		if count < f+1 {
 			continue
 		}
 		cert.CanApply = true
 		client.applyNum++
 		spend := time.Since(client.startTime)
-		fmt.Printf("[time] apply num=%d\tspend time=%0.2fs\n", client.applyNum, ToSecond(spend))
+		log.Printf("[time] apply num=%d\tspend time=%0.2fs\n", client.applyNum, ToSecond(spend))
 	}
 }

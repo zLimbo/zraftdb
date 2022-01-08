@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"runtime"
@@ -11,26 +10,20 @@ import (
 )
 
 func init() {
-	log.SetFlags(log.Ldate | log.Ltime | log.Lshortfile)
-	runtime.GOMAXPROCS(1)
+	log.SetFlags(log.Ltime | log.Lshortfile)
+	// runtime.GOMAXPROCS(1)
 }
+
+// const kConfigFile = "config/config.json"
 
 func main() {
 
 	// args: 参与ip个数（按node.txt顺序） 本ip进程数 本ip第几个结点 boost数 本结点请求数 请求开始延时
-	// ipNum, processNum, processIdx, boostNum, reqNum, boostDelay int
+	// var ipNum, processNum, processIdx, boostNum, reqNum, boostDelay int
 
 	ipNum, _ := strconv.Atoi(os.Args[1])
 	processNum, _ := strconv.Atoi(os.Args[2])
-
-	pbft.InitNodeAddr(ipNum, processNum)
-
 	processIdx, _ := strconv.Atoi(os.Args[3])
-
-	if processIdx == -1 {
-		runClient()
-		return
-	}
 
 	boostNum := ipNum * processIdx
 	reqNum, boostDelay := 0, pbft.BoostDelay
@@ -43,9 +36,22 @@ func main() {
 			}
 		}
 	}
-	fmt.Printf("# boostNum=%d, reqNum=%d, boostDelay=%d\n", boostNum, reqNum, boostDelay)
+
 	pbft.BoostNum = boostNum
-	runServer(processIdx, reqNum, boostDelay)
+	log.Printf("# boostNum=%d, reqNum=%d, boostDelay=%d\n", boostNum, reqNum, boostDelay)
+
+	pbft.InitConfig(ipNum, processNum)
+
+	localIp := pbft.GetLocalIp()
+	if localIp == pbft.KConfig.ClientIp {
+		runClient()
+		return
+	} else {
+		runServer(processIdx, reqNum, boostDelay)
+	}
+
+	
+	
 }
 
 func runServer(processIdx, reqNum, boostDelay int) {
@@ -53,9 +59,9 @@ func runServer(processIdx, reqNum, boostDelay int) {
 	port := 10000 + processIdx
 	nodeId := pbft.GetId(ip, port)
 
-	fmt.Println("## node ip:", ip)
-	fmt.Println("## node port:", port)
-	fmt.Println("## node id:", nodeId)
+	log.Println("## node ip:", ip)
+	log.Println("## node port:", port)
+	log.Println("## node id:", nodeId)
 
 	server := pbft.NewPbft(nodeId)
 	server.Start(reqNum, boostDelay)

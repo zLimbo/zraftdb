@@ -58,7 +58,7 @@ func IsExist(path string) bool {
 }
 
 func ReadKeyPair(keyDir string) ([]byte, []byte) {
-	fmt.Println("read key pair from", keyDir)
+	log.Println("read key pair from", keyDir)
 	priKey, err := ioutil.ReadFile(keyDir + "/rsa.pri.pem")
 	if err != nil {
 		log.Panic(err)
@@ -80,13 +80,13 @@ func RsaSignWithSha256(data []byte, keyBytes []byte) []byte {
 	}
 	privateKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
 	if err != nil {
-		fmt.Println("ParsePKCS8PrivateKey err", err)
+		log.Println("ParsePKCS8PrivateKey err", err)
 		panic(err)
 	}
 
 	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hashed)
 	if err != nil {
-		fmt.Printf("Error from signing: %s\n", err)
+		log.Printf("Error from signing: %s\n", err)
 		panic(err)
 	}
 
@@ -156,8 +156,8 @@ func VerifyPrePrepareSignMsg(signMsg *SignMessage, pubKey []byte) bool {
 		}
 		verifyTime += time.Since(start)
 	}
-	fmt.Println("digestTime:", digestTime)
-	fmt.Println("verifyTime:", verifyTime)
+	log.Println("digestTime:", digestTime)
+	log.Println("verifyTime:", verifyTime)
 	return true
 }
 
@@ -186,8 +186,8 @@ func SignMsg(msg *Message, priKey []byte) *SignMessage {
 //		signTime += time.Since(start)
 //		signMsg.TxSigns = append(signMsg.TxSigns, sign)
 //	}
-//	fmt.Println("digestTime:", digestTime)
-//	fmt.Println("signTime:", signTime)
+//	log.Println("digestTime:", digestTime)
+//	log.Println("signTime:", signTime)
 //	return signMsg
 //}
 
@@ -206,8 +206,8 @@ func SignRequest(msg *Message, priKey []byte) *Message {
 		signTime += time.Since(start)
 		msg.TxSigns = append(msg.TxSigns, sign)
 	}
-	fmt.Println("digestTime:", digestTime)
-	fmt.Println("signTime:", signTime)
+	log.Println("digestTime:", digestTime)
+	log.Println("signTime:", signTime)
 	return msg
 }
 
@@ -224,7 +224,7 @@ func (pbft *Pbft) signMsg(msg *Message) *SignMessage {
 
 func GenRsaKeys(ips []string, ipNum, processNum int) {
 	if !IsExist("./certs") {
-		fmt.Println("检测到还未生成公私钥目录，正在生成公私钥 ...")
+		log.Println("检测到还未生成公私钥目录，正在生成公私钥 ...")
 		err := os.Mkdir("certs", 0744)
 		if err != nil {
 			log.Panic(err)
@@ -269,6 +269,6 @@ func GenRsaKeys(ips []string, ipNum, processNum int) {
 				addrFile.WriteString(ip + ":" + strconv.Itoa(8000+i))
 			}
 		}
-		fmt.Println("已为节点们生成RSA公私钥")
+		log.Println("已为节点们生成RSA公私钥")
 	}
 }

@@ -1,7 +1,6 @@
 package pbft
 
 import (
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net"
@@ -37,7 +36,7 @@ func GetLocalIp() string {
 	ipBytes, err := ioutil.ReadFile(kLocalIpFile)
 	if err == nil {
 		ip := string(ipBytes)
-		fmt.Println("** get ip from local_ip.txt, ip:", ip)
+		log.Println("** get ip from local_ip.txt, ip:", ip)
 		return strings.TrimSpace(ip)
 	}
 
@@ -48,7 +47,7 @@ func GetLocalIp() string {
 	localAddr := tcpConn.LocalAddr().(*net.UDPAddr)
 	log.Println("localAddr:", localAddr.String())
 	ip := strings.Split(localAddr.String(), ":")[0]
-	fmt.Println("** get ip from dial, ip:", ip)
+	log.Println("** get ip from dial, ip:", ip)
 
 	if err = ioutil.WriteFile(kLocalIpFile, []byte(ip), 0644); err != nil {
 		log.Panic(err)
@@ -91,7 +90,7 @@ func GetId(ip string, port int) int64 {
 		}
 		prefix = prefix*1000 + int64(num)
 	}
-	
+
 	id := prefix*int64(100) + int64(port%100)
 	return id
 }

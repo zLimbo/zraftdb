@@ -6,7 +6,7 @@ import sys
 import socket
 from multiprocessing import Process
 
-def get_host_ip():
+def get_local_ip():
     try:
         with open('config/local_ip.txt', 'r') as f:
             ip = f.readline().strip()
@@ -39,7 +39,7 @@ def get_local_req_no_list(ipNum, processNum, boostNum):
         for ipIdx in range(ipNum):
             if count >= boostNum:
                 return localReqNoList
-            if ips[ipIdx] == hostIp:
+            if ips[ipIdx] == localIp:
                 localReqNoList.append(count)
             count += 1
     return localReqNoList
@@ -57,15 +57,15 @@ if __name__ == '__main__':
         if len(sys.argv) > 6:
             boostDelayNum = int(sys.argv[6])
 
-    hostIp = get_host_ip()
+    localIp = get_local_ip()
     localReqNoList = get_local_req_no_list(ipNum, processNum, boostNum)
-    print("# ipNum={}".format(ipNum))
-    print("# processNum={}".format(processNum))
-    print("# boostNum={}".format(boostNum))
-    print("# hostIp={}".format(hostIp))
-    print("# localReqNoList(len={})={}".format(len(localReqNoList), localReqNoList))
-    print("# boostDelayGap={}".format(boostDelayGap))
-    print("# boostDelayNum={}".format(boostDelayNum))
+    print("== ipNum={}".format(ipNum))
+    print("== processNum={}".format(processNum))
+    print("== boostNum={}".format(boostNum))
+    print("== localIp={}".format(localIp))
+    print("== localReqNoList(len={})={}".format(len(localReqNoList), localReqNoList))
+    print("== boostDelayGap={}".format(boostDelayGap))
+    print("== boostDelayNum={}".format(boostDelayNum))
 
     idx = 0
     for processIdx in range(1, processNum + 1):

@@ -13,7 +13,8 @@ int main(int argc, char **argv) {
         throw runtime_error("argc < 2");
     }
     const char *ips_file = argv[1];
-    const char *send_file = argv[2];
+    const char *dst_path = argv[2];
+    const char *src_file = argv[3];
 
     auto start = chrono::steady_clock::now();
     vector<thread> ths;
@@ -24,10 +25,9 @@ int main(int argc, char **argv) {
         ths.emplace_back([&, ip] {
             auto start = chrono::steady_clock::now();
             char cmd[128];
-            sprintf(cmd, "sshpass -p tongxing scp -r %s tongxing@%s:~/lab",
-                    send_file, ip.c_str());
+            sprintf(cmd, "sshpass -p tongxing scp -r %s tongxing@%s:~/%s",
+                    src_file, ip.c_str(), dst_path);
 
-            system(cmd)
             FILE *pp = popen(cmd, "r");  // build pipe
             if (!pp) {
                 printf("popen error, cmd: %s (len=%ld)\n", cmd, strlen(cmd));

@@ -20,7 +20,7 @@ func TestPbft(t *testing.T) {
 	ipNum, _ := strconv.Atoi(args[1])
 	processNum, _ := strconv.Atoi(args[2])
 
-	pbft.InitNodeAddr(ipNum, processNum)
+	pbft.InitConfig(ipNum, processNum)
 
 	processIdx, _ := strconv.Atoi(args[3])
 
