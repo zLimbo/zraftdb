@@ -27,7 +27,7 @@ type Stat struct {
 	count3pc, count2pc                                         int64
 	execTimeSum, execTimeCnt                                   time.Duration
 	signTimeSum, signTimeCnt                                   time.Duration
-	verifyTimeSum, verifyTimeCnt                               time.Duration
+	verifyPPTimeSum, verifyPPTimeCnt                           time.Duration
 	times                                                      []int64
 }
 
@@ -42,11 +42,10 @@ type Replica struct {
 	node        *Node
 	stat        *Stat
 	msgCertPool map[int64]*MsgCert
-
-	boostChan chan int64
-	batchPool map[int64]*Batch
-	batchSeq  int64
-	curBatch  *Batch
+	boostChan   chan int64
+	batchPool   map[int64]*Batch
+	batchSeq    int64
+	curBatch    *Batch
 }
 
 func NewReplica(id int64) *Replica {
@@ -70,33 +69,32 @@ func (replica *Replica) Start() {
 	go replica.listen()
 	go replica.keep()
 	go replica.handleMsg()
+	go replica.connStatus()
 	//go pbft.status()
-	//go pbft.flowStatistics()
 
 	if KConfig.ReqNum > 0 && GetIndex(replica.node.ip) < KConfig.BoostNum {
 		go replica.boostReq()
 	}
 
+	// 阻塞
 	select {}
 }
 
 func (replica *Replica) handleMsg() {
-	for signMsg := range signMsgChan {
-
+	for signMsg := range kSignMsgChan {
 		node := GetNode(signMsg.Msg.NodeId)
 		start := time.Now()
 		if !VerifySignMsg(signMsg, node.pubKey) {
-			Panic("#### verify failed!")
+			Panic("VerifySignMsg(signMsg, node.pubKey) failed")
 		}
 		verifyTime := time.Since(start)
 		if signMsg.Msg.MsgType == MtPrePrepare {
-			replica.stat.verifyTimeSum += verifyTime
-			replica.stat.verifyTimeCnt++
+			replica.stat.verifyPPTimeSum += verifyTime
+			replica.stat.verifyPPTimeCnt++
 		}
 
 		msg := signMsg.Msg
-		Info("+ handle start + batch seq:", replica.batchSeq, "recvChan size:", len(signMsgChan))
-		//Info("recv msg{", msg.MsgType, msg.Seq, msg.NodeId, msg.Timestamp, "}")
+		Info("batch seq: %d, recvChan size: %d", replica.batchSeq, len(kSignMsgChan))
 		switch msg.MsgType {
 		case MtProposal:
 			replica.handleProposal(msg)
@@ -110,15 +108,15 @@ func (replica *Replica) handleMsg() {
 			replica.handleCommit(msg)
 		}
 
-		Info("[req=%d, pre-prepare=%d, prepare=%d, commit=%d, reply=%d, recvchan_size=%d, noConnCnt=%d]\n",
+		Info("req=%d, pre-prepare=%d, prepare=%d, commit=%d, reply=%d, recvchan_size=%d, noConnCnt=%d\n",
 			replica.stat.requestNum,
 			replica.stat.prePrepareNum,
 			replica.stat.prepareNum,
 			replica.stat.commitNum,
 			replica.stat.replyNum,
-			len(signMsgChan),
-			notConnCnt)
-		Info("[recv pre-prepare num:", replica.curBatch.prePrepareMsgNum, "]")
+			len(kSignMsgChan),
+			kNotConnCnt)
+		Info("recv pre-prepare num:", replica.curBatch.prePrepareMsgNum, "]")
 	}
 }
 
@@ -133,10 +131,10 @@ func (replica *Replica) getMsgCert(seq int64) *MsgCert {
 }
 
 func (replica *Replica) handleRequest(msg *Message) {
-	Info("<node handleRequestMsg> msg seq=", msg.Seq, "tx num", len(msg.Txs))
+	Info("msg.seq: %d tx.num: %d", msg.Seq, len(msg.Txs))
 	msgCert := replica.getMsgCert(msg.Seq)
 	if msgCert.Req != nil {
-		Info("The request(seq=%d) has been accepted!\n", msg.Seq)
+		Info("The request[seq=%d] has been accepted", msg.Seq)
 		return
 	}
 

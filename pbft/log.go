@@ -134,8 +134,8 @@ func (pbft *Replica) showTime(msgCert *MsgCert) {
 	Info("avgTimeCommit:\t%0.6fs\n", avgTimeCommit/math.Pow10(9))
 
 	Info("\n+++ chan len ++++")
-	Info("recvChan:", len(signMsgChan))
-	Info("connectChan:", len(waitConnChan))
+	Info("recvChan:", len(kSignMsgChan))
+	Info("connectChan:", len(kWaitConnChan))
 	Info("pbft.node.connMgr.recvChan:", len(pbft.node.connMgr.recvChan))
 	Info("pbft.node.connMgr.sendChan:", len(pbft.node.connMgr.sendChan))
 
@@ -153,7 +153,7 @@ func (pbft *Replica) status() {
 			pbft.stat.commitNum,
 			pbft.stat.replyNum)
 		Info("[recv pre-prepare num:", pbft.curBatch.prePrepareMsgNum, "]")
-		Info("send error num:", sendFailCount)
+		Info("send error num:", kSendFailCount)
 		Info("goroutine num:", runtime.NumGoroutine())
 
 		Info("\n+++ conn status")
@@ -198,10 +198,10 @@ func (pbft *Replica) status() {
 		}
 
 		Info("\n+++ verifyTime")
-		Info("verifyTimeCnt:", int64(stat.verifyTimeCnt))
-		if stat.verifyTimeCnt > 0 {
-			PrintTime("verifyTimeSum", stat.verifyTimeSum)
-			PrintTime("verifyTimeAvg", stat.verifyTimeSum/stat.verifyTimeCnt)
+		Info("verifyTimeCnt:", int64(stat.verifyPPTimeCnt))
+		if stat.verifyPPTimeCnt > 0 {
+			PrintTime("verifyTimeSum", stat.verifyPPTimeSum)
+			PrintTime("verifyTimeAvg", stat.verifyPPTimeSum/stat.verifyPPTimeCnt)
 		}
 
 		Info("\033[34m\n[Avg Time]\033[0m\n")
@@ -230,8 +230,8 @@ func (pbft *Replica) status() {
 		Info("avgTimeCommit:\t%0.6fs\n", avgTimeCommit/math.Pow10(9))
 
 		Info("\n+++ chan len ++++")
-		Info("recvChan:", len(signMsgChan))
-		Info("connectChan:", len(waitConnChan))
+		Info("recvChan:", len(kSignMsgChan))
+		Info("connectChan:", len(kWaitConnChan))
 		Info("pbft.node.connMgr.recvChan:", len(pbft.node.connMgr.recvChan))
 		Info("pbft.node.connMgr.sendChan:", len(pbft.node.connMgr.sendChan))
 

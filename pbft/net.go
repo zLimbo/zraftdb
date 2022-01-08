@@ -11,16 +11,16 @@ import (
 )
 
 const (
-	sendLenByteSize = 4
-	IdByteSize      = 8
-	TryBuildConnNum = 3
+	kSendLenByteSize = 4
+	kIdByteSize      = 8
+	kTryBuildConnNum = 3
 )
 
 var (
-	signMsgChan   = make(chan *SignMessage, ChanSize)
-	waitConnChan  = make(chan *Node, ChanSize)
-	sendFailCount = 0
-	notConnCnt    = 0
+	kSignMsgChan   = make(chan *SignMessage, ChanSize)
+	kWaitConnChan  = make(chan *Node, ChanSize)
+	kSendFailCount = 0
+	kNotConnCnt    = 0
 )
 
 type ConnMgr struct {
@@ -98,7 +98,7 @@ func (connMgr *ConnMgr) send() {
 	for bytes := range connMgr.sendChan {
 
 		sz := len(bytes)
-		szBytes := I2Bytes(int64(sz), sendLenByteSize)
+		szBytes := I2Bytes(int64(sz), kSendLenByteSize)
 		data := append(szBytes, bytes...)
 
 		if connMgr.getTcpConn() == nil {
@@ -109,7 +109,7 @@ func (connMgr *ConnMgr) send() {
 		_, err := connMgr.write(data)
 		if err != nil {
 			Warn("connMgr.write(data), err: %v", err)
-			sendFailCount++
+			kSendFailCount++
 			connMgr.closeTcpConn()
 			connMgr.sendChan <- bytes
 			return
@@ -141,43 +141,42 @@ func (connMgr *ConnMgr) handleMsg() {
 		connMgr.recvBuf = append(connMgr.recvBuf, buf...)
 		buf = nil
 		for {
-			if len(connMgr.recvBuf) < sendLenByteSize {
+			if len(connMgr.recvBuf) < kSendLenByteSize {
 				break
 			}
-			size := Bytes2I(connMgr.recvBuf[:sendLenByteSize], sendLenByteSize)
-			if len(connMgr.recvBuf) < sendLenByteSize+int(size) {
+			size := Bytes2I(connMgr.recvBuf[:kSendLenByteSize], kSendLenByteSize)
+			if len(connMgr.recvBuf) < kSendLenByteSize+int(size) {
 				break
 			}
 			var signMsg SignMessage
-			err := json.Unmarshal(connMgr.recvBuf[sendLenByteSize:sendLenByteSize+size], &signMsg)
+			err := json.Unmarshal(connMgr.recvBuf[kSendLenByteSize:kSendLenByteSize+size], &signMsg)
 			if err != nil {
 				Panic("json.Unmarshal(...), err: %v", err)
 			}
-			signMsgChan <- &signMsg
-			connMgr.recvBuf = connMgr.recvBuf[sendLenByteSize+size:]
+			kSignMsgChan <- &signMsg
+			connMgr.recvBuf = connMgr.recvBuf[kSendLenByteSize+size:]
 		}
 	}
 }
 
 func (replica *Replica) keep() {
-	go replica.ConnStatus()
 	for {
-		notConnCnt = 0
+		kNotConnCnt = 0
 		if KConfig.ClientNode.connMgr.getTcpConn() == nil {
-			notConnCnt++
-			waitConnChan <- KConfig.ClientNode
+			kNotConnCnt++
+			kWaitConnChan <- KConfig.ClientNode
 		}
 		for id, node := range KConfig.Id2Node {
 			if id == replica.node.id {
 				continue
 			}
 			if node.connMgr.getTcpConn() == nil {
-				notConnCnt++
-				waitConnChan <- node
+				kNotConnCnt++
+				kWaitConnChan <- node
 			}
 		}
-		Info("current not connect count: %d", notConnCnt)
-		if notConnCnt != 0 {
+		Info("current not connect count: %d", kNotConnCnt)
+		if kNotConnCnt != 0 {
 			time.Sleep(time.Second * 1)
 		} else {
 			time.Sleep(time.Second * 5)
@@ -204,8 +203,8 @@ func (replica *Replica) listen() {
 }
 
 func (replica *Replica) listenBuildConn(tcpConn net.Conn) {
-	buf := make([]byte, IdByteSize)
-	for i := 0; i < TryBuildConnNum; i++ {
+	buf := make([]byte, kIdByteSize)
+	for i := 0; i < kTryBuildConnNum; i++ {
 		n, err := tcpConn.Read(buf)
 		if err != nil {
 			break
@@ -214,11 +213,11 @@ func (replica *Replica) listenBuildConn(tcpConn net.Conn) {
 			runtime.Gosched()
 			continue
 		}
-		if n != IdByteSize {
+		if n != kIdByteSize {
 			tcpConn.Write([]byte{0})
 			break
 		}
-		nodeId := Bytes2I(buf, IdByteSize)
+		nodeId := Bytes2I(buf, kIdByteSize)
 		node := GetNode(nodeId)
 		ok := node.connMgr.setTcpConn(tcpConn)
 		if !ok {
@@ -232,7 +231,7 @@ func (replica *Replica) listenBuildConn(tcpConn net.Conn) {
 }
 
 func (replica *Replica) connect() {
-	for node := range waitConnChan {
+	for node := range kWaitConnChan {
 		if node.connMgr.getTcpConn() != nil {
 			continue
 		}
@@ -247,9 +246,9 @@ func (replica *Replica) connect() {
 }
 
 func (replica *Replica) connectBuildConn(tcpConn net.Conn, node *Node) {
-	idBytes := I2Bytes(replica.node.id, IdByteSize)
+	idBytes := I2Bytes(replica.node.id, kIdByteSize)
 	tcpConn.Write(idBytes)
-	for i := 0; i < TryBuildConnNum; i++ {
+	for i := 0; i < kTryBuildConnNum; i++ {
 		buf := make([]byte, 1)
 		n, err := tcpConn.Read(buf)
 		if err != nil {
@@ -270,7 +269,7 @@ func (replica *Replica) connectBuildConn(tcpConn net.Conn, node *Node) {
 	tcpConn.Close()
 }
 
-func (replica *Replica) ConnStatus() {
+func (replica *Replica) connStatus() {
 	time.Sleep(3 * time.Second)
 	for {
 		Info("==== connect status ====")
