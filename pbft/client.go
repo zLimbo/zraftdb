@@ -22,6 +22,7 @@ func NewClient() *Client {
 func (client *Client) Start() {
 	go client.listen()
 	go client.handleReplyMsg()
+	go client.connStatus()
 
 	select {}
 }
@@ -42,12 +43,12 @@ func (client *Client) handleReplyMsg() {
 		// Info("handle reply:", msg)
 		node := GetNode(signMsg.Msg.NodeId)
 		if !VerifySignMsg(signMsg, node.pubKey) {
-			Info("#### verify failed!")
+			Warn("VerifySignMsg(signMsg, node.pubKey) failed")
 			continue
 		}
 		msg := signMsg.Msg
 		if msg.MsgType != MtReply {
-			Info("it's not reply!")
+			Warn("it's not reply!")
 			continue
 		}
 		cert := client.getReplyCert(msg.Seq)
@@ -65,13 +66,13 @@ func (client *Client) handleReplyMsg() {
 			// }
 		}
 		cert.Replys = append(cert.Replys, msg)
-		Info("\033[32m[Reply]\033[0m msg seq=%d node_id=%d, count=%d\n", msg.Seq, msg.NodeId, count)
+		Trace("msg.seq=%d, node.id=%d, count=%d", msg.Seq, msg.NodeId, count)
 		if count < KConfig.FalultNum+1 {
 			continue
 		}
 		cert.CanApply = true
 		client.applyNum++
 		spend := time.Since(client.startTime)
-		Info("[time] apply num=%d\tspend time=%0.2fs\n", client.applyNum, ToSecond(spend))
+		Info("== applyNum=%d, spend=%v", client.applyNum, spend)
 	}
 }

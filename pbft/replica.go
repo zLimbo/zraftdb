@@ -2,7 +2,6 @@ package pbft
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"time"
 )
@@ -72,7 +71,7 @@ func (replica *Replica) Start() {
 	go replica.connStatus()
 	//go pbft.status()
 
-	if KConfig.ReqNum > 0 && GetIndex(replica.node.ip) < KConfig.BoostNum {
+	if KConfig.ReqNum > 0 && replica.GetIndex() < KConfig.BoostNum {
 		go replica.boostReq()
 	}
 
@@ -85,7 +84,7 @@ func (replica *Replica) handleMsg() {
 		node := GetNode(signMsg.Msg.NodeId)
 		start := time.Now()
 		if !VerifySignMsg(signMsg, node.pubKey) {
-			Panic("VerifySignMsg(signMsg, node.pubKey) failed")
+			Error("VerifySignMsg(signMsg, node.pubKey) failed")
 		}
 		verifyTime := time.Since(start)
 		if signMsg.Msg.MsgType == MtPrePrepare {
@@ -96,8 +95,6 @@ func (replica *Replica) handleMsg() {
 		msg := signMsg.Msg
 		Info("batch seq: %d, recvChan size: %d", replica.batchSeq, len(kSignMsgChan))
 		switch msg.MsgType {
-		case MtProposal:
-			replica.handleProposal(msg)
 		case MtRequest:
 			replica.handleRequest(msg)
 		case MtPrePrepare:
@@ -108,7 +105,7 @@ func (replica *Replica) handleMsg() {
 			replica.handleCommit(msg)
 		}
 
-		Info("req=%d, pre-prepare=%d, prepare=%d, commit=%d, reply=%d, recvchan_size=%d, noConnCnt=%d\n",
+		Info("req=%d, pre-prepare=%d, prepare=%d, commit=%d, reply=%d, recvchan_size=%d, noConnCnt=%d",
 			replica.stat.requestNum,
 			replica.stat.prePrepareNum,
 			replica.stat.prepareNum,
@@ -116,7 +113,7 @@ func (replica *Replica) handleMsg() {
 			replica.stat.replyNum,
 			len(kSignMsgChan),
 			kNotConnCnt)
-		Info("recv pre-prepare num:", replica.curBatch.prePrepareMsgNum, "]")
+		Info("replica.curBatch.prePrepareMsgNum=%d", replica.curBatch.prePrepareMsgNum)
 	}
 }
 
@@ -131,10 +128,10 @@ func (replica *Replica) getMsgCert(seq int64) *MsgCert {
 }
 
 func (replica *Replica) handleRequest(msg *Message) {
-	Info("msg.seq: %d tx.num: %d", msg.Seq, len(msg.Txs))
+	Trace("msg.seq=%d, tx.size=%d", msg.Seq, len(msg.Txs))
 	msgCert := replica.getMsgCert(msg.Seq)
 	if msgCert.Req != nil {
-		Info("The request[seq=%d] has been accepted", msg.Seq)
+		Trace("this request msg[seq=%d] has been accepted", msg.Seq)
 		return
 	}
 
@@ -147,16 +144,16 @@ func (replica *Replica) handleRequest(msg *Message) {
 
 	replica.curBatch.times[1] = time.Now()
 
-	LogStageStart(fmt.Sprintf("seq=%d pre-prepare", msgCert.Seq))
+	Info("[START] pre-prepare | seq=%d", msgCert.Seq)
 
 	replica.sendPrePrepare(msgCert)
 }
 
 func (replica *Replica) handlePrePrepare(msg *Message) {
-	Info("<node handlePrePrepareMsg> msg seq=", msg.Seq, "tx num", len(msg.Txs))
+	Trace("msg.seq=%d, tx.size=%d", msg.Seq, len(msg.Txs))
 	msgCert := replica.getMsgCert(msg.Seq)
 	if msgCert.PrePrepare != nil {
-		Info("The pre-prepare(seq=%d) has been accepted!\n", msg.Seq)
+		Trace("this pre-prepare msg[seq=%d] has been accepted", msg.Seq)
 		return
 	}
 	if msgCert.SendPrepare == HasSend {
@@ -169,7 +166,7 @@ func (replica *Replica) handlePrePrepare(msg *Message) {
 
 	msgCert.Time = time.Now().UnixNano()
 	msgCert.PrepareTime = time.Now().UnixNano()
-	LogStageStart(fmt.Sprintf("seq=%d prepare", msgCert.Seq))
+	Info("[START] prepare | seq=%d", msgCert.Seq)
 
 	replica.sendPrepare(msgCert)
 }
@@ -179,8 +176,7 @@ func (replica *Replica) handlePrepare(msg *Message) {
 	if msgCert.SendCommit == HasSend {
 		return
 	}
-	Info("<node handlePrepareMsg> msg seq=%d nodeId=%d\n", msg.Seq, msg.NodeId)
-	Info("\t\033[32mtime:\033[0m", time.Duration(time.Now().UnixNano()-msgCert.PrePrepareTime))
+	Trace("msg.seq=%d, msg.nodeId=%d", msg.Seq, msg.NodeId)
 	replica.recvPrepareMsg(msgCert, msg)
 	replica.maybeSendCommit(msgCert)
 }
@@ -190,7 +186,7 @@ func (replica *Replica) handleCommit(msg *Message) {
 	if msgCert.SendReply == HasSend {
 		return
 	}
-	Info("<node handleCommitMsg> msg seq=%d nodeId=%d\n", msg.Seq, msg.NodeId)
+	Trace("msg.seq=%d, msg.nodeId=%d", msg.Seq, msg.NodeId)
 	replica.recvCommitMsg(msgCert, msg)
 	replica.maybeSendReply(msgCert)
 }
@@ -207,7 +203,7 @@ func (replica *Replica) recvPrepareMsg(msgCert *MsgCert, msg *Message) {
 	// }
 	msgCert.Prepares = append(msgCert.Prepares, msg)
 	count := len(msgCert.Prepares)
-	Info("same prepare msg count=%d\n", count)
+	Trace("same prepare msg count: %d", count)
 	if count >= 2*KConfig.FalultNum {
 		msgCert.SendCommit = WaitSend
 	}
@@ -225,7 +221,7 @@ func (replica *Replica) recvCommitMsg(msgCert *MsgCert, msg *Message) {
 	// }
 	msgCert.Commits = append(msgCert.Commits, msg)
 	count := len(msgCert.Commits)
-	Info("same commit msg count=%d\n", count)
+	Trace("same commit msg count: %d", count)
 	if count >= 2*KConfig.FalultNum+1 {
 		msgCert.SendReply = WaitSend
 	}
@@ -242,14 +238,14 @@ func (replica *Replica) sendPrePrepare(msgCert *MsgCert) {
 	signMsg := replica.signMsg(prePrepareMsg)
 	replica.broadcast(signMsg, msgCert)
 	msgCert.SendPrePrepare = HasSend
-	Info("[pre-prepare] msg has been sent.")
+	Trace("[pre-prepare] msg has been sent.")
 
 	msgCert.PrePrepareTime = time.Now().UnixNano() - msgCert.PrePrepareTime
-	LogStageEnd(fmt.Sprintf("seq=%d pre-prepare", msgCert.Seq))
+	Info("[END] pre-prepare | seq=%d", msgCert.Seq)
 
 	msgCert.PrepareTime = time.Now().UnixNano()
 	msgCert.SendPrepare = HasSend
-	LogStageStart(fmt.Sprintf("seq=%d prepare", msgCert.Seq))
+	Info("[START] prepare | seq=%d", msgCert.Seq)
 	replica.maybeSendCommit(msgCert)
 }
 
@@ -262,7 +258,6 @@ func (replica *Replica) sendPrepare(msgCert *MsgCert) {
 	}
 	replica.recvPrepareMsg(msgCert, prepareMsg)
 	signMsg := replica.signMsg(prepareMsg)
-	Info("<broadcast> prepare")
 	replica.broadcast(signMsg, msgCert)
 	msgCert.SendPrepare = HasSend
 	replica.stat.prePrepareNum++
@@ -272,7 +267,7 @@ func (replica *Replica) sendPrepare(msgCert *MsgCert) {
 	//	pbft.curBatch.times[2] = time.Now()
 	//}
 
-	Info("[prepare] msg has been sent.")
+	Trace("[prepare] msg has been sent.")
 	replica.maybeSendCommit(msgCert)
 }
 
@@ -283,7 +278,8 @@ func (replica *Replica) maybeSendCommit(msgCert *MsgCert) {
 	replica.stat.prepareNum++
 
 	msgCert.PrepareTime = time.Now().UnixNano() - msgCert.PrepareTime
-	LogStageEnd(fmt.Sprintf("seq=%d prepare", msgCert.Seq))
+
+	Info("[END] prepare | seq=%d", msgCert.Seq)
 
 	//pbft.curBatch.counts[3]++
 	//if pbft.curBatch.counts[3] == 2*f+1 {
@@ -291,7 +287,7 @@ func (replica *Replica) maybeSendCommit(msgCert *MsgCert) {
 	//}
 
 	msgCert.CommitTime = time.Now().UnixNano()
-	LogStageStart(fmt.Sprintf("seq=%d commit", msgCert.Seq))
+	Info("[START] commit | seq=%d", msgCert.Seq)
 
 	commitMsg := &Message{
 		MsgType:   MtCommit,
@@ -304,7 +300,7 @@ func (replica *Replica) maybeSendCommit(msgCert *MsgCert) {
 	signMsg := replica.signMsg(commitMsg)
 	replica.broadcast(signMsg, msgCert)
 	msgCert.SendCommit = HasSend
-	Info("[commit] msg has been sent.")
+	Trace("commit msg has been sent.")
 	replica.maybeSendReply(msgCert)
 }
 
@@ -316,9 +312,9 @@ func (replica *Replica) maybeSendReply(msgCert *MsgCert) {
 	msgCert.Time = time.Now().UnixNano() - msgCert.Time
 	msgCert.CommitTime = time.Now().UnixNano() - msgCert.CommitTime
 	replica.stat.commitNum++
-	LogStageEnd(fmt.Sprintf("seq=%d commit", msgCert.Seq))
+	Info("[END] commit | seq=%d", msgCert.Seq)
 
-	LogStageStart(fmt.Sprintf("seq=%d reply", msgCert.Seq))
+	Info("[START] reply | seq=%d", msgCert.Seq)
 	replyMsg := &Message{
 		MsgType:   MtReply,
 		Seq:       msgCert.Seq,
@@ -328,16 +324,16 @@ func (replica *Replica) maybeSendReply(msgCert *MsgCert) {
 	signMsg := replica.signMsg(replyMsg)
 	signMsgBytes, err := json.Marshal(signMsg)
 	if err != nil {
-		Panic("json.Marshal(signMsg), err: %v", err)
+		Error("json.Marshal(signMsg), err: %v", err)
 	}
 	KConfig.ClientNode.connMgr.sendChan <- signMsgBytes
 	// go PostJson(ClientUrl+"/getReply", jsonMsg)
 	msgCert.SendReply = HasSend
 
-	Info("[reply] msg has been sent, seq=%d\n", msgCert.Seq)
-	LogStageEnd(fmt.Sprintf("seq=%d reply reply_count=%d", msgCert.Seq, replica.stat.replyNum))
-	replica.stat.replyNum++
+	Trace("reply msg has been sent, seq=%d", msgCert.Seq)
+	Info("[END] reply | seq=%d, reply_count=%d", msgCert.Seq, replica.stat.replyNum)
 
+	replica.stat.replyNum++
 	replica.finalize(msgCert)
 }
 
@@ -347,25 +343,25 @@ func (replica *Replica) finalize(msgCert *MsgCert) {
 	replica.curBatch.counts[4]++
 	if replica.curBatch.counts[4] == KConfig.BoostNum {
 		replica.curBatch.times[4] = time.Now()
-		LogStageEnd(fmt.Sprintf("Batch %d", replica.batchSeq))
+		Info("[END] batch | seq=%d", replica.batchSeq)
 
-		replica.showBatchTime()
-		//pbft.exec(BoostNum)
+		// replica.showBatchTime()
+		replica.exec(KConfig.BoostNum)
 		replica.curBatch = &Batch{}
 		replica.curBatch.times[0] = time.Now()
 		replica.batchSeq += 1
 		replica.batchPool[replica.batchSeq] = replica.curBatch
 		replica.boostChan <- replica.batchSeq
 
-		LogStageStart(fmt.Sprintf("Batch %d", replica.batchSeq))
+		Info("[START] batch | seq=%d", replica.batchSeq)
 	}
 
-	replica.showTime(msgCert)
+	// replica.showTime(msgCert)
 	replica.clearCert(msgCert)
 }
 
 func (replica *Replica) exec(num int) {
-	LogStageStart("Exec")
+	Info("[START] execute")
 	start := time.Now()
 	sum := int64(0)
 	for j := 0; j < num; j++ {
@@ -373,13 +369,13 @@ func (replica *Replica) exec(num int) {
 			sum += i
 		}
 	}
-	Info("Exec result:", sum)
-	LogStageEnd("Exec")
+	Trace("Exec result: sum=%d", sum)
+	Info("[END] execute")
 	execTime := time.Since(start)
 	replica.stat.execTimeSum += execTime
 	replica.stat.execTimeCnt++
 
-	Info("Exec time:", execTime)
+	Info("execTime=%d", execTime)
 }
 
 func (replica *Replica) clearCert(msgCert *MsgCert) {
@@ -392,7 +388,7 @@ func (replica *Replica) clearCert(msgCert *MsgCert) {
 func (replica *Replica) broadcast(signMsg *SignMessage, msgCert *MsgCert) {
 	signMsgBytes, err := json.Marshal(signMsg)
 	if err != nil {
-		Panic("json.Marshal(signMsg), err: %v", err)
+		Error("json.Marshal(signMsg), err: %v", err)
 	}
 	for _, node := range KConfig.Id2Node {
 		if node.id == replica.node.id {
@@ -400,6 +396,17 @@ func (replica *Replica) broadcast(signMsg *SignMessage, msgCert *MsgCert) {
 		}
 		node.connMgr.sendChan <- signMsgBytes
 	}
+}
+
+func (replica *Replica) signMsg(msg *Message) *SignMessage {
+	start := time.Now()
+	signMsg := SignMsg(msg, replica.node.priKey)
+	signTime := time.Since(start)
+	if msg.MsgType == MtPrePrepare {
+		replica.stat.signTimeSum += signTime
+		replica.stat.signTimeCnt++
+	}
+	return signMsg
 }
 
 func (replica *Replica) boostReq() {
@@ -416,61 +423,43 @@ func (replica *Replica) boostReq() {
 		Txs:       &BatchTx{},
 	}
 	SignRequest(req, replica.node.priKey)
-	jsonMsg, err := json.Marshal(req)
+	jsonBytes, err := json.Marshal(req)
 	if err != nil {
-		Warn("err: %v", err)
+		Warn("json.Marshal(req), err: %v", err)
 	}
-	Info("req sz =", float64(len(jsonMsg))/MBSize)
-
-	Info("# boost num =", KConfig.ReqNum)
-	Info("# boostSeqChan len:", len(replica.boostChan))
+	Info("req.size=%.2f, ReqNum=%d, boostChan=%d", float64(len(jsonBytes))/MBSize, KConfig.ReqNum, len(replica.boostChan))
 	//time.Sleep(time.Duration(boostDelay) * time.Millisecond)
 
 	replica.boostChan <- 0
 
-	LogStageStart(fmt.Sprintf("Batch %d", replica.batchSeq))
+	Info("[START] batch | seq=%d", replica.batchSeq)
 	prefix := replica.node.id * 10000
 
 	time.Sleep(time.Millisecond * time.Duration(KConfig.StartDelay))
 	start := time.Now()
+
 	for batchSeq := range replica.boostChan {
 		if batchSeq == int64(KConfig.ReqNum) {
 			break
 		}
-		Info("# batchSeq:", batchSeq)
-
 		req.Seq = prefix + batchSeq
 		req.Timestamp = time.Now().UnixNano()
+		// signMsg := replica.signMsg(req)
+		// kSignMsgChan <- signMsg
+
 		msgCert := replica.getMsgCert(req.Seq)
 		msgCert.Req = req
 		msgCert.SendPrePrepare = WaitSend
+
+		// 直接发送pre-prepare消息
 		replica.sendPrePrepare(msgCert)
-		//signMsg := pbft.signMsg(req)
-		//// pbft.RecvChan.RequestMsgChan <- reqMsg
-		//recvChan <- signMsg
 	}
-	Info("\033[32m[req]\033[0m req finish, KConfig.ReqNum:", KConfig.ReqNum, "spend time:", time.Since(start))
+	Info("all request finish | KConfig.ReqNum=%d, spendTime=%d", KConfig.ReqNum, time.Since(start))
 
 	time.Sleep(time.Second * 60)
 	for _, node := range KConfig.Id2Node {
 		node.connMgr.closeTcpConn()
 	}
-	Info("===> Exit")
+	Info("done, exit")
 	os.Exit(1)
-}
-
-func (replica *Replica) handleProposal(msg *Message) {
-	msgCert := replica.getMsgCert(msg.Seq)
-
-	replica.sendRequest(msgCert)
-}
-
-func (replica *Replica) sendRequest(msgCert *MsgCert) {
-	//req := &Message{
-	//	MsgType:   MtRequest,
-	//	Seq:       msgCert.Seq,
-	//	NodeId:    pbft.node.id,
-	//	Timestamp: time.Now().UnixNano(),
-	//	Txs:       &BatchTx{},
-	//}
 }

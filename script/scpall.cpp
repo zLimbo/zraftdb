@@ -14,7 +14,7 @@ int main(int argc, char **argv) {
     }
     const char *ips_file = argv[1];
     const char *dst_path = argv[2];
-    const char *src_file = argv[3];
+    const char *src_file = argv[2];
 
     auto start = chrono::steady_clock::now();
     vector<thread> ths;
@@ -25,7 +25,7 @@ int main(int argc, char **argv) {
         ths.emplace_back([&, ip] {
             auto start = chrono::steady_clock::now();
             char cmd[128];
-            sprintf(cmd, "sshpass -p tongxing scp -r %s tongxing@%s:~/%s",
+            sprintf(cmd, "sshpass -p tongxing scp -r %s tongxing@%s:~/lab/%s",
                     src_file, ip.c_str(), dst_path);
 
             FILE *pp = popen(cmd, "r");  // build pipe

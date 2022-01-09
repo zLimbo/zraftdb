@@ -15,9 +15,10 @@
     "ipNum": 10,
     "portBase": 10000,
     "processNum": 1,
-    "reqNum": 20,
+    "reqNum": 3,
     "boostNum": -1,
     "startDelay": 3000,
     "recvBufSize": 1024,
-    "logStdout": true
+    "logStdout": true,
+    "logLevel": 0
 }

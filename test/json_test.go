@@ -20,13 +20,13 @@ type Config struct {
 func TestJson(t *testing.T) {
 	text, err := ioutil.ReadFile("../config/config.json")
 	if err != nil {
-		pbft.Panic("err: %v", err)
+		pbft.Error("err: %v", err)
 	}
 	fmt.Println("text:", string(text))
 	var config Config
 	err = json.Unmarshal([]byte(text), &config)
 	if err != nil {
-		pbft.Panic("err: %v", err)
+		pbft.Error("err: %v", err)
 	}
 	fmt.Println(config)
 	pbft.Info("abc")

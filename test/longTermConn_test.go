@@ -47,7 +47,7 @@ func client() {
 
 	//conn, err := net.Dial("tcp", addr)
 	if err != nil {
-		pbft.Panic("err: %v", err)
+		pbft.Error("err: %v", err)
 	}
 
 	for i := 0; i < 1; i++ {
@@ -166,13 +166,13 @@ func server() {
 	// listen, err := net.Listen("tcp", addr)
 	listen, err := net.Listen("tcp4", addr)
 	if err != nil {
-		pbft.Panic("err: %v", err)
+		pbft.Error("err: %v", err)
 	}
 	defer listen.Close()
 
 	conn, err := listen.Accept()
 	if err != nil {
-		pbft.Panic("err: %v", err)
+		pbft.Error("err: %v", err)
 	}
 
 	fmt.Println("#### conn")

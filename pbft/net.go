@@ -59,7 +59,7 @@ func (connMgr *ConnMgr) setTcpConn(tcpConn net.Conn) bool {
 	}
 	connMgr.tcpConn = tcpConn
 	if connMgr.tcpConn != nil {
-		Info("connect ok, local: %s, remote: %s", tcpConn.LocalAddr(), tcpConn.RemoteAddr())
+		Trace("connect ok, local: %s, remote: %s", tcpConn.LocalAddr(), tcpConn.RemoteAddr())
 		go connMgr.send()
 		go connMgr.recv()
 	}
@@ -151,7 +151,7 @@ func (connMgr *ConnMgr) handleMsg() {
 			var signMsg SignMessage
 			err := json.Unmarshal(connMgr.recvBuf[kSendLenByteSize:kSendLenByteSize+size], &signMsg)
 			if err != nil {
-				Panic("json.Unmarshal(...), err: %v", err)
+				Error("json.Unmarshal(...), err: %v", err)
 			}
 			kSignMsgChan <- &signMsg
 			connMgr.recvBuf = connMgr.recvBuf[kSendLenByteSize+size:]
@@ -175,7 +175,6 @@ func (replica *Replica) keep() {
 				kWaitConnChan <- node
 			}
 		}
-		Info("current not connect count: %d", kNotConnCnt)
 		if kNotConnCnt != 0 {
 			time.Sleep(time.Second * 1)
 		} else {
@@ -188,10 +187,10 @@ func (replica *Replica) listen() {
 	addr := "0.0.0.0:" + strconv.Itoa(replica.node.port)
 	listener, err := net.Listen("tcp4", addr)
 	if err != nil {
-		Panic("net.Listen(\"tcp4\", addr), err: %v", err)
+		Error("net.Listen(\"tcp4\", addr), err: %v", err)
 	}
 	defer listener.Close()
-	Info(replica.node.addr + "listen...")
+	Trace(replica.node.addr + "listen...")
 	for {
 		tcpConn, err := listener.Accept()
 		if err != nil {
@@ -235,10 +234,10 @@ func (replica *Replica) connect() {
 		if node.connMgr.getTcpConn() != nil {
 			continue
 		}
-		Info("dial %s ...", node.addr)
+		Trace("dial %s ...", node.addr)
 		tcpConn, err := net.Dial("tcp4", node.addr)
 		if err != nil {
-			Info("dial %s failed", node.addr)
+			Warn("dial %s failed", node.addr)
 			continue
 		}
 		replica.connectBuildConn(tcpConn, node)
@@ -274,13 +273,23 @@ func (replica *Replica) connStatus() {
 	for {
 		Info("==== connect status ====")
 		for _, node := range KConfig.Id2Node {
+			if replica.node == node {
+				continue
+			}
 			if node.connMgr.getTcpConn() != nil {
-				Info("== [connect ok] %s", node.addr)
+				Info("[connect ok] %s", node.addr)
 			} else {
-				Warn("== [connect fail] %s", node.addr)
+				Warn("[connect fail] %s", node.addr)
 			}
 		}
-		Info("====")
-		time.Sleep(10 * time.Second)
+		if !IsClient() {
+			if KConfig.ClientNode.connMgr.getTcpConn() != nil {
+				Info("[connect ok] %s", KConfig.ClientNode.addr)
+			} else {
+				Warn("[connect fail] %s", KConfig.ClientNode.addr)
+			}
+		}
+		Info("========================")
+		time.Sleep(20 * time.Second)
 	}
 }

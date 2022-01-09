@@ -93,7 +93,7 @@ func dial() {
 	msg := &Msg{Ip: LocalIp}
 	jsonMsg, err := json.Marshal(msg)
 	if err != nil {
-		pbft.Panic("err: %v", err)
+		pbft.Error("err: %v", err)
 	}
 	for {
 		for _, ip := range Ips {
@@ -123,7 +123,7 @@ func main() {
 		http.HandleFunc("/", index)
 		err := http.ListenAndServe("0.0.0.0:"+strconv.Itoa(Port), nil)
 		if err != nil {
-			pbft.Panic("err: %v", err)
+			pbft.Error("err: %v", err)
 		}
 	}()
 
