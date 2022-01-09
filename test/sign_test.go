@@ -33,7 +33,7 @@ func TestSignTime(t *testing.T) {
 	ppMsgBytes, _ := json.Marshal(ppMsg)
 	fmt.Println("ppMsg len:", float64(len(ppMsgBytes))/float64(pbft.MBSize))
 
-	priKey, pubKey := pbft.GetKeyPair()
+	priKey, pubKey := GetKeyPair()
 
 	start := time.Now()
 	digest := pbft.Sha256Digest(reqMsg)
@@ -81,7 +81,7 @@ func TestSignTime2(t *testing.T) {
 	ppMsgBytes, _ := json.Marshal(ppMsg)
 	fmt.Println("ppMsg size:", float64(len(ppMsgBytes))/float64(pbft.MBSize))
 
-	priKey, pubKey := pbft.GetKeyPair()
+	priKey, pubKey := GetKeyPair()
 
 	start := time.Now()
 	signMsg := pbft.SignMsg(ppMsg, priKey)
@@ -109,7 +109,7 @@ func TestSignTime2(t *testing.T) {
 }
 
 func TestHashTime(t *testing.T) {
-	priKey, pubKey := pbft.GetKeyPair()
+	priKey, pubKey := GetKeyPair()
 	const threadNum = 4
 	runtime.GOMAXPROCS(threadNum)
 
