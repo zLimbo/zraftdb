@@ -10,7 +10,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"io/ioutil"
-	"time"
 )
 
 func ReadKeyPair(keyDir string) ([]byte, []byte) {
@@ -100,25 +99,25 @@ func SignMsg(msg *Message, priKey []byte) *SignMessage {
 	return &SignMessage{msg, sign}
 }
 
-func SignRequest(msg *Message, priKey []byte) *Message {
-	if msg.Txs == nil {
-		return msg
-	}
-	digestTime, signTime := time.Duration(0), time.Duration(0)
-	msg.TxSigns = make([][]byte, 0)
-	for _, tx := range msg.Txs {
-		start := time.Now()
-		digest := Sha256Digest(tx)
-		digestTime += time.Since(start)
-		start = time.Now()
-		sign := RsaSignWithSha256(digest, priKey)
-		signTime += time.Since(start)
-		msg.TxSigns = append(msg.TxSigns, sign)
-	}
-	Info("digestTime: %v", digestTime)
-	Info("signTime: %v", signTime)
-	return msg
-}
+// func SignMsg(msg *Message, priKey []byte) *Message {
+// 	if msg.Txs == nil {
+// 		return msg
+// 	}
+// 	digestTime, signTime := time.Duration(0), time.Duration(0)
+// 	msg.TxSigns = make([][]byte, 0)
+// 	for _, tx := range msg.Txs {
+// 		start := time.Now()
+// 		digest := Sha256Digest(tx)
+// 		digestTime += time.Since(start)
+// 		start = time.Now()
+// 		sign := RsaSignWithSha256(digest, priKey)
+// 		signTime += time.Since(start)
+// 		msg.TxSigns = append(msg.TxSigns, sign)
+// 	}
+// 	Info("digestTime: %v", digestTime)
+// 	Info("signTime: %v", signTime)
+// 	return msg
+// }
 
 // func VerifyPrePrepareSignMsg(signMsg *SignMessage, pubKey []byte) bool {
 // 	txs := signMsg.Msg.Req.Txs

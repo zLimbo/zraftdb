@@ -8,8 +8,6 @@ import (
 
 const (
 	MBSize       = 1024 * 1024
-	BatchTxNum   = 4096 / 1
-	TxSize       = 256
 	ChanSize     = 10000
 	ExecTime     = 0
 	ExecNum      = 1e8
@@ -29,7 +27,10 @@ type Config struct {
 	StartDelay  int      `json:"startDelay"`
 	RecvBufSize int      `json:"recvBufSize"`
 	LogStdout   bool     `json:"logStdout"`
-	LogLevel    LogLevel `json:"LogLevel"`
+	LogLevel    LogLevel `json:"logLevel"`
+	GoMaxProcs  int      `json:"goMaxProcs"`
+	BatchTxNum  int      `json:"batchTxNum"`
+	TxSize      int      `json:"txSize"`
 
 	Id2Node    map[int64]*Node
 	ClientNode *Node

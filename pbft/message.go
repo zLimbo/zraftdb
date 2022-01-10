@@ -12,7 +12,6 @@ const (
 	MtProposal
 )
 
-type BatchTx [BatchTxNum][TxSize]byte
 
 type Message struct {
 	MsgType   MessageType `json:"msgType"`
@@ -20,9 +19,8 @@ type Message struct {
 	NodeId    int64       `json:"nodeId"`
 	Timestamp int64       `json:"timestamp"`
 
-	Txs     *BatchTx `json:"txs"`
-	TxSigns [][]byte `json:"txSigns"`
-	Req     *Message `json:"req"`
+	Tx []byte
+	Req *Message `json:"req"`
 }
 
 type SignMessage struct {

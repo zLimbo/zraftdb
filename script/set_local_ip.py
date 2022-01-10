@@ -1,6 +1,7 @@
 import socket
 
-def get_host_ip():
+
+def set_host_ip():
     try:
         with open('config/local_ip.txt', 'r') as f:
             ip = f.readline().strip()
@@ -19,4 +20,5 @@ def get_host_ip():
     print("# get ip from dial, ip:", ip)
     return ip
 
-get_host_ip()
+
+set_host_ip()

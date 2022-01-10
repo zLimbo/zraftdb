@@ -12,13 +12,16 @@
         "10.11.7.75"
     ],
     "clientIp": "10.11.1.207",
-    "ipNum": 10,
+    "ipNum": 8,
     "portBase": 10000,
-    "processNum": 1,
-    "reqNum": 3,
+    "processNum": 2,
+    "reqNum": 10,
     "boostNum": -1,
     "startDelay": 3000,
-    "recvBufSize": 1024,
+    "recvBufSize": 2048,
     "logStdout": true,
-    "logLevel": 0
+    "logLevel": 1,
+    "goMaxProcs": 4,
+    "batchTxNum": 1024,
+    "txSize": 256
 }

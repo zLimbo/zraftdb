@@ -30,9 +30,10 @@ func main() {
 		flag.Parse()
 
 		pbft.Info("start server...")
-		runtime.GOMAXPROCS(1)
+		runtime.GOMAXPROCS(pbft.KConfig.GoMaxProcs)
 		nodeId := pbft.GetId(pbft.KConfig.LocalIp, pbft.KConfig.PortBase+processIdx)
 		replica := pbft.NewReplica(nodeId)
 		replica.Start()
+
 	}
 }

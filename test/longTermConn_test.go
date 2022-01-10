@@ -56,7 +56,7 @@ func client() {
 			Seq:       1,
 			NodeId:    0,
 			Timestamp: time.Now().UnixNano(),
-			Txs:       new(pbft.BatchTx),
+			Tx:        make([]byte, 0),
 		}
 		reqMsgBytes, _ := json.Marshal(reqMsg)
 		fmt.Println("reqMsg size:", float64(len(reqMsgBytes))/float64(pbft.MBSize))

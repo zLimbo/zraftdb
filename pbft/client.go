@@ -22,7 +22,7 @@ func NewClient() *Client {
 func (client *Client) Start() {
 	go client.listen()
 	go client.handleReplyMsg()
-	go client.connStatus()
+	// go client.connStatus()
 
 	select {}
 }
@@ -73,6 +73,6 @@ func (client *Client) handleReplyMsg() {
 		cert.CanApply = true
 		client.applyNum++
 		spend := time.Since(client.startTime)
-		Info("== applyNum=%d, spend=%v", client.applyNum, spend)
+		Info("== applyNum=%d, spend=%.2f", client.applyNum, ToSecond(spend))
 	}
 }

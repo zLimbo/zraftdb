@@ -16,9 +16,9 @@ func TestDigest(t *testing.T) {
 		Seq:       1,
 		NodeId:    0,
 		Timestamp: time.Now().UnixNano(),
-		Txs:       &pbft.BatchTx{},
+		Tx: make([]byte, 0),
 	}
-	pbft.SignRequest(req, priKey)
+	pbft.SignMsg(req, priKey)
 
 	digest := pbft.Sha256Digest(req)
 

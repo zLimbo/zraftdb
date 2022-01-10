@@ -17,7 +17,7 @@ func TestSignTime(t *testing.T) {
 		NodeId:    0,
 		Timestamp: time.Now().UnixNano(),
 
-		Txs: new(pbft.BatchTx),
+		Tx: make([]byte, 0),
 	}
 	reqMsgBytes, _ := json.Marshal(reqMsg)
 	fmt.Println("reqMsg len:", float64(len(reqMsgBytes))/float64(pbft.MBSize))
@@ -65,7 +65,7 @@ func TestSignTime2(t *testing.T) {
 		NodeId:    0,
 		Timestamp: time.Now().UnixNano(),
 
-		Txs: new(pbft.BatchTx),
+		Tx: make([]byte, 0),
 	}
 	reqMsgBytes, _ := json.Marshal(reqMsg)
 	fmt.Println("reqMsg size:", float64(len(reqMsgBytes))/float64(pbft.MBSize))
@@ -87,8 +87,8 @@ func TestSignTime2(t *testing.T) {
 	signMsg := pbft.SignMsg(ppMsg, priKey)
 	signMsgBytes, _ := json.Marshal(signMsg)
 	fmt.Println("ppSignMsg size:", float64(len(signMsgBytes))/float64(pbft.MBSize))
-	fmt.Println("tx num:", len(signMsg.Msg.Req.Txs))
-	fmt.Println("signs num:", len(signMsg.Msg.Req.TxSigns))
+	// fmt.Println("tx num:", len(signMsg.Msg.Req.Txs))
+	// fmt.Println("signs num:", len(signMsg.Msg.Req.TxSigns))
 	gap1 := time.Since(start)
 	start = time.Now()
 	result := pbft.VerifySignMsg(signMsg, pubKey)

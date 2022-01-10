@@ -46,4 +46,8 @@ output/
 
 *.tar.*
 
+tmp/
+log
+*.log
+
 !.gitignore

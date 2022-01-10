@@ -25,11 +25,11 @@ func TestExecTime(t *testing.T) {
 		Seq:       1,
 		NodeId:    0,
 		Timestamp: time.Now().UnixNano(),
-		Txs:       &pbft.BatchTx{},
+		Tx:        make([]byte, 0),
 	}
 	fmt.Println("batch tx gen time:", time.Since(start))
 	start = time.Now()
-	pbft.SignRequest(req, priKey)
+	pbft.SignMsg(req, priKey)
 	fmt.Println("sign tx time:", time.Since(start))
 	start = time.Now()
 	json.Marshal(req)

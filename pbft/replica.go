@@ -128,7 +128,7 @@ func (replica *Replica) getMsgCert(seq int64) *MsgCert {
 }
 
 func (replica *Replica) handleRequest(msg *Message) {
-	Trace("msg.seq=%d, tx.size=%d", msg.Seq, len(msg.Txs))
+	Trace("msg.seq=%d, tx.size=%d", msg.Seq, len(msg.Tx))
 	msgCert := replica.getMsgCert(msg.Seq)
 	if msgCert.Req != nil {
 		Trace("this request msg[seq=%d] has been accepted", msg.Seq)
@@ -150,7 +150,7 @@ func (replica *Replica) handleRequest(msg *Message) {
 }
 
 func (replica *Replica) handlePrePrepare(msg *Message) {
-	Trace("msg.seq=%d, tx.size=%d", msg.Seq, len(msg.Txs))
+	Trace("msg.seq=%d, tx.size=%d", msg.Seq, len(msg.Tx))
 	msgCert := replica.getMsgCert(msg.Seq)
 	if msgCert.PrePrepare != nil {
 		Trace("this pre-prepare msg[seq=%d] has been accepted", msg.Seq)
@@ -346,7 +346,7 @@ func (replica *Replica) finalize(msgCert *MsgCert) {
 		Info("[END] batch | seq=%d", replica.batchSeq)
 
 		// replica.showBatchTime()
-		replica.exec(KConfig.BoostNum)
+		// replica.exec(KConfig.BoostNum)
 		replica.curBatch = &Batch{}
 		replica.curBatch.times[0] = time.Now()
 		replica.batchSeq += 1
@@ -420,15 +420,14 @@ func (replica *Replica) boostReq() {
 		Seq:       1,
 		NodeId:    replica.node.id,
 		Timestamp: time.Now().UnixNano(),
-		Txs:       &BatchTx{},
+		Tx:        make([]byte, KConfig.BatchTxNum*KConfig.TxSize),
 	}
-	SignRequest(req, replica.node.priKey)
+	SignMsg(req, replica.node.priKey)
 	jsonBytes, err := json.Marshal(req)
 	if err != nil {
 		Warn("json.Marshal(req), err: %v", err)
 	}
 	Info("req.size=%.2f, ReqNum=%d, boostChan=%d", float64(len(jsonBytes))/MBSize, KConfig.ReqNum, len(replica.boostChan))
-	//time.Sleep(time.Duration(boostDelay) * time.Millisecond)
 
 	replica.boostChan <- 0
 
