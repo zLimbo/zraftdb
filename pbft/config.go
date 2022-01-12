@@ -9,34 +9,37 @@ import (
 const (
 	MBSize       = 1024 * 1024
 	ChanSize     = 10000
-	ExecTime     = 0
-	ExecNum      = 1e8
 	KConfigFile  = "./config/config.json"
 	KCertsDir    = "./certs"
 	KLocalIpFile = "./config/local_ip.txt"
 )
 
 type Config struct {
-	PeerIps     []string `json:"peerIps"`
-	ClientIp    string   `json:"clientIp"`
-	IpNum       int      `json:"ipNum"`
-	PortBase    int      `json:"portBase"`
-	ProcessNum  int      `json:"processNum"`
-	ReqNum      int      `json:"reqNum"`
-	BoostNum    int      `json:"boostNum"`
-	StartDelay  int      `json:"startDelay"`
-	RecvBufSize int      `json:"recvBufSize"`
-	LogStdout   bool     `json:"logStdout"`
-	LogLevel    LogLevel `json:"logLevel"`
-	GoMaxProcs  int      `json:"goMaxProcs"`
-	BatchTxNum  int      `json:"batchTxNum"`
-	TxSize      int      `json:"txSize"`
+	PeerIps      []string `json:"PeerIps"`
+	ClientIp     string   `json:"ClientIp"`
+	IpNum        int      `json:"IpNum"`
+	PortBase     int      `json:"PortBase"`
+	ProcessNum   int      `json:"ProcessNum"`
+	ReqNum       int      `json:"ReqNum"`
+	BoostNum     int      `json:"BoostNum"`
+	StartDelay   int      `json:"StartDelay"`
+	RecvBufSize  int      `json:"RecvBufSize"`
+	LogStdout    bool     `json:"LogStdout"`
+	LogLevel     LogLevel `json:"LogLevel"`
+	GoMaxProcs   int      `json:"GoMaxProcs"`
+	BatchTxNum   int      `json:"BatchTxNum"`
+	TxSize       int      `json:"TxSize"`
+	GossipNum    int      `json:"GossipNum"`
+	EnableGossip bool     `json:"EnableGossip"`
+	ExecNum      int      `json:"ExecNum"`
+	
 
 	Id2Node    map[int64]*Node
 	ClientNode *Node
 	PeerIds    []int64
 	LocalIp    string
 	FalultNum  int
+	RouteMap   map[int64][]int64
 }
 
 var KConfig Config
@@ -80,6 +83,33 @@ func InitConfig(configFile string) {
 		KConfig.BoostNum = KConfig.IpNum * KConfig.ProcessNum
 	}
 
+	// 默认 gossipNum 为 3
+	if KConfig.EnableGossip && KConfig.GossipNum <= 0 {
+		KConfig.GossipNum = 3
+	}
+
+	// 配置路由表
+	peerNum := KConfig.IpNum * KConfig.ProcessNum
+	KConfig.RouteMap = make(map[int64][]int64)
+	for k, i := 1, 0; i < peerNum; i++ {
+		fromId := KConfig.PeerIds[i]
+		KConfig.RouteMap[fromId] = make([]int64, 0, 3)
+		if k == peerNum {
+			continue
+		}
+		for j := 0; j < KConfig.GossipNum; j++ {
+			// if k == i {
+			// 	k = (k + 1) % peerNum
+			// }
+			KConfig.RouteMap[fromId] = append(KConfig.RouteMap[fromId], KConfig.PeerIds[k])
+			// k = (k + 1) % peerNum
+			k++
+			if k == peerNum {
+				break
+			}
+		}
+	}
+
 	Info("config ok. KConfig: %v", KConfig)
 }
 
@@ -98,9 +128,9 @@ func GetNode(id int64) *Node {
 	return node
 }
 
-func (replica *Replica) GetIndex() int {
+func GetIndex(nodeId int64) int {
 	for idx, id := range KConfig.PeerIds {
-		if replica.node.id == id {
+		if nodeId == id {
 			return idx
 		}
 	}

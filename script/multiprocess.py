@@ -38,14 +38,14 @@ if __name__ == '__main__':
     print('config:', config)
     print("local ip:", localIp)
 
-    ipNum = config["ipNum"]
-    processNum = config["processNum"]
-    peerIps = config["peerIps"][:ipNum]
+    ipNum = config["IpNum"]
+    processNum = config["ProcessNum"]
+    peerIps = config["PeerIps"][:ipNum]
 
     if not os.path.exists("./log"):
         os.mkdir("./log")
 
-    if localIp == config["clientIp"]:
+    if localIp == config["ClientIp"]:
         log_file = 'log/{}-{}.log'.format(processNum, 1)
         cmd = 'bin/zpbft > {}'.format(log_file)
         print(">>>", cmd)

@@ -82,21 +82,15 @@ func JsonMarshal(msg interface{}) []byte {
 }
 
 func VerifySignMsg(signMsg *SignMessage, pubKey []byte) bool {
-	//if signMsg.Msg.MsgType == MtPrePrepare {
-	//	return VerifyPrePrepareSignMsg(signMsg, pubKey)
-	//}
 	digest := Sha256Digest(signMsg.Msg)
 	result := RsaVerifyWithSha256(digest, signMsg.Sign, pubKey)
 	return result
 }
 
 func SignMsg(msg *Message, priKey []byte) *SignMessage {
-	//if msg.MsgType == MtPrePrepare {
-	//	return SignPrePrepareMsg(msg, priKey)
-	//}
 	digest := Sha256Digest(msg)
 	sign := RsaSignWithSha256(digest, priKey)
-	return &SignMessage{msg, sign}
+	return &SignMessage{msg, sign, -1}
 }
 
 // func SignMsg(msg *Message, priKey []byte) *Message {

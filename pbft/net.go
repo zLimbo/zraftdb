@@ -271,6 +271,7 @@ func (replica *Replica) connectBuildConn(tcpConn net.Conn, node *Node) {
 func (replica *Replica) connStatus() {
 	time.Sleep(3 * time.Second)
 	for {
+		ok := true
 		Info("==== connect status ====")
 		for _, node := range KConfig.Id2Node {
 			if replica.node == node {
@@ -280,6 +281,7 @@ func (replica *Replica) connStatus() {
 				Info("[connect ok] %s", node.addr)
 			} else {
 				Warn("[connect fail] %s", node.addr)
+				ok = false
 			}
 		}
 		if !IsClient() {
@@ -287,9 +289,15 @@ func (replica *Replica) connStatus() {
 				Info("[connect ok] %s", KConfig.ClientNode.addr)
 			} else {
 				Warn("[connect fail] %s", KConfig.ClientNode.addr)
+				ok = false
 			}
 		}
 		Info("========================")
-		time.Sleep(30 * time.Second)
+		if ok {
+			time.Sleep(30 * time.Second)
+		} else {
+			time.Sleep(5 * time.Second)
+		}
+
 	}
 }

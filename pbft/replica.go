@@ -7,9 +7,7 @@ import (
 )
 
 type Batch struct {
-	counts           [5]int
-	times            [5]time.Time
-	prePrepareMsgNum int
+	count int
 }
 
 func NewBatch() *Batch {
@@ -19,30 +17,20 @@ func NewBatch() *Batch {
 
 type Stat struct {
 	requestNum, prePrepareNum, prepareNum, commitNum, replyNum int64
-	prePrepareTime, prepareTime, commitTime                    int64
-	batchTimeOkNum                                             int64
-	time0, time1, time2, time3, time4                          time.Duration
-	time3pcSum, time2pcSum                                     int64
-	count3pc, count2pc                                         int64
-	execTimeSum, execTimeCnt                                   time.Duration
-	signTimeSum, signTimeCnt                                   time.Duration
-	verifyPPTimeSum, verifyPPTimeCnt                           time.Duration
-	times                                                      []int64
 }
 
 func NewStat() *Stat {
-	stat := &Stat{
-		times: make([]int64, 0),
-	}
+	stat := &Stat{}
 	return stat
 }
 
 type Replica struct {
 	node        *Node
 	stat        *Stat
-	msgCertPool map[int64]*MsgCert
 	boostChan   chan int64
+	msgCertPool map[int64]*MsgCert
 	batchPool   map[int64]*Batch
+	gossipPool  map[string]bool
 	batchSeq    int64
 	curBatch    *Batch
 }
@@ -51,14 +39,14 @@ func NewReplica(id int64) *Replica {
 	pbft := &Replica{
 		node:        GetNode(id),
 		stat:        NewStat(),
-		msgCertPool: make(map[int64]*MsgCert),
 		boostChan:   make(chan int64, ChanSize),
+		msgCertPool: make(map[int64]*MsgCert),
+		gossipPool:  make(map[string]bool),
 		batchPool:   make(map[int64]*Batch),
 		batchSeq:    0,
 		curBatch:    NewBatch(),
 	}
 	pbft.batchPool[pbft.batchSeq] = pbft.curBatch
-	pbft.curBatch.times[0] = time.Now()
 	return pbft
 }
 
@@ -71,7 +59,7 @@ func (replica *Replica) Start() {
 	go replica.connStatus()
 	//go pbft.status()
 
-	if KConfig.ReqNum > 0 && replica.GetIndex() < KConfig.BoostNum {
+	if KConfig.ReqNum > 0 && GetIndex(replica.node.id) < KConfig.BoostNum {
 		go replica.boostReq()
 	}
 
@@ -81,19 +69,23 @@ func (replica *Replica) Start() {
 
 func (replica *Replica) handleMsg() {
 	for signMsg := range kSignMsgChan {
+
+		// 若有配置，采用 gossip 转发
+		if KConfig.EnableGossip {
+			ok := replica.gossip(signMsg)
+			// 如果未进行gossip发送，说明该消息已经被本节点处理
+			if !ok {
+				continue
+			}
+		}
+
 		node := GetNode(signMsg.Msg.NodeId)
-		start := time.Now()
 		if !VerifySignMsg(signMsg, node.pubKey) {
 			Error("VerifySignMsg(signMsg, node.pubKey) failed")
 		}
-		verifyTime := time.Since(start)
-		if signMsg.Msg.MsgType == MtPrePrepare {
-			replica.stat.verifyPPTimeSum += verifyTime
-			replica.stat.verifyPPTimeCnt++
-		}
 
 		msg := signMsg.Msg
-		Info("batch seq: %d, recvChan size: %d", replica.batchSeq, len(kSignMsgChan))
+		Info("batch seq: %d", replica.batchSeq)
 		switch msg.MsgType {
 		case MtRequest:
 			replica.handleRequest(msg)
@@ -105,7 +97,7 @@ func (replica *Replica) handleMsg() {
 			replica.handleCommit(msg)
 		}
 
-		Info("req=%d, pre-prepare=%d, prepare=%d, commit=%d, reply=%d, recvchan_size=%d, noConnCnt=%d",
+		Info("requestNum=%d, prePrepareNum=%d, prepareNum=%d, commitNum=%d, replyNum=%d, kSignMsgChan.size=%d, kNotConnCnt=%d",
 			replica.stat.requestNum,
 			replica.stat.prePrepareNum,
 			replica.stat.prepareNum,
@@ -113,7 +105,6 @@ func (replica *Replica) handleMsg() {
 			replica.stat.replyNum,
 			len(kSignMsgChan),
 			kNotConnCnt)
-		Info("replica.curBatch.prePrepareMsgNum=%d", replica.curBatch.prePrepareMsgNum)
 	}
 }
 
@@ -139,11 +130,6 @@ func (replica *Replica) handleRequest(msg *Message) {
 	msgCert.Req = msg
 	msgCert.SendPrePrepare = WaitSend
 
-	msgCert.Time = time.Now().UnixNano()
-	msgCert.PrePrepareTime = time.Now().UnixNano()
-
-	replica.curBatch.times[1] = time.Now()
-
 	Info("[START] pre-prepare | seq=%d", msgCert.Seq)
 
 	replica.sendPrePrepare(msgCert)
@@ -164,8 +150,6 @@ func (replica *Replica) handlePrePrepare(msg *Message) {
 	msgCert.PrePrepare = msg
 	msgCert.SendPrepare = WaitSend
 
-	msgCert.Time = time.Now().UnixNano()
-	msgCert.PrepareTime = time.Now().UnixNano()
 	Info("[START] prepare | seq=%d", msgCert.Seq)
 
 	replica.sendPrepare(msgCert)
@@ -176,7 +160,7 @@ func (replica *Replica) handlePrepare(msg *Message) {
 	if msgCert.SendCommit == HasSend {
 		return
 	}
-	Trace("msg.seq=%d, msg.nodeId=%d", msg.Seq, msg.NodeId)
+	Trace("msg.Seq=%d, msg.NodeId=%d", msg.Seq, msg.NodeId)
 	replica.recvPrepareMsg(msgCert, msg)
 	replica.maybeSendCommit(msgCert)
 }
@@ -186,7 +170,7 @@ func (replica *Replica) handleCommit(msg *Message) {
 	if msgCert.SendReply == HasSend {
 		return
 	}
-	Trace("msg.seq=%d, msg.nodeId=%d", msg.Seq, msg.NodeId)
+	Trace("msg.Seq=%d, msg.NodeId=%d", msg.Seq, msg.NodeId)
 	replica.recvCommitMsg(msgCert, msg)
 	replica.maybeSendReply(msgCert)
 }
@@ -236,16 +220,15 @@ func (replica *Replica) sendPrePrepare(msgCert *MsgCert) {
 		Req:       msgCert.Req,
 	}
 	signMsg := replica.signMsg(prePrepareMsg)
-	replica.broadcast(signMsg, msgCert)
+	replica.broadcast(signMsg)
 	msgCert.SendPrePrepare = HasSend
-	Trace("[pre-prepare] msg has been sent.")
 
-	msgCert.PrePrepareTime = time.Now().UnixNano() - msgCert.PrePrepareTime
+	Trace("[pre-prepare] msg has been sent.")
 	Info("[END] pre-prepare | seq=%d", msgCert.Seq)
 
-	msgCert.PrepareTime = time.Now().UnixNano()
 	msgCert.SendPrepare = HasSend
 	Info("[START] prepare | seq=%d", msgCert.Seq)
+
 	replica.maybeSendCommit(msgCert)
 }
 
@@ -258,16 +241,11 @@ func (replica *Replica) sendPrepare(msgCert *MsgCert) {
 	}
 	replica.recvPrepareMsg(msgCert, prepareMsg)
 	signMsg := replica.signMsg(prepareMsg)
-	replica.broadcast(signMsg, msgCert)
+	replica.broadcast(signMsg)
 	msgCert.SendPrepare = HasSend
 	replica.stat.prePrepareNum++
-
-	//pbft.curBatch.counts[2]++
-	//if pbft.curBatch.counts[2] == 2*f+1 {
-	//	pbft.curBatch.times[2] = time.Now()
-	//}
-
 	Trace("[prepare] msg has been sent.")
+
 	replica.maybeSendCommit(msgCert)
 }
 
@@ -277,16 +255,7 @@ func (replica *Replica) maybeSendCommit(msgCert *MsgCert) {
 	}
 	replica.stat.prepareNum++
 
-	msgCert.PrepareTime = time.Now().UnixNano() - msgCert.PrepareTime
-
 	Info("[END] prepare | seq=%d", msgCert.Seq)
-
-	//pbft.curBatch.counts[3]++
-	//if pbft.curBatch.counts[3] == 2*f+1 {
-	//	pbft.curBatch.times[3] = time.Now()
-	//}
-
-	msgCert.CommitTime = time.Now().UnixNano()
 	Info("[START] commit | seq=%d", msgCert.Seq)
 
 	commitMsg := &Message{
@@ -295,12 +264,12 @@ func (replica *Replica) maybeSendCommit(msgCert *MsgCert) {
 		NodeId:    replica.node.id,
 		Timestamp: time.Now().UnixNano(),
 	}
-
 	replica.recvCommitMsg(msgCert, commitMsg)
 	signMsg := replica.signMsg(commitMsg)
-	replica.broadcast(signMsg, msgCert)
+	replica.broadcast(signMsg)
 	msgCert.SendCommit = HasSend
 	Trace("commit msg has been sent.")
+
 	replica.maybeSendReply(msgCert)
 }
 
@@ -308,13 +277,11 @@ func (replica *Replica) maybeSendReply(msgCert *MsgCert) {
 	if msgCert.SendCommit != HasSend || msgCert.SendReply != WaitSend {
 		return
 	}
-
-	msgCert.Time = time.Now().UnixNano() - msgCert.Time
-	msgCert.CommitTime = time.Now().UnixNano() - msgCert.CommitTime
 	replica.stat.commitNum++
-	Info("[END] commit | seq=%d", msgCert.Seq)
 
+	Info("[END] commit | seq=%d", msgCert.Seq)
 	Info("[START] reply | seq=%d", msgCert.Seq)
+
 	replyMsg := &Message{
 		MsgType:   MtReply,
 		Seq:       msgCert.Seq,
@@ -327,7 +294,6 @@ func (replica *Replica) maybeSendReply(msgCert *MsgCert) {
 		Error("json.Marshal(signMsg), err: %v", err)
 	}
 	KConfig.ClientNode.connMgr.sendChan <- signMsgBytes
-	// go PostJson(ClientUrl+"/getReply", jsonMsg)
 	msgCert.SendReply = HasSend
 
 	Trace("reply msg has been sent, seq=%d", msgCert.Seq)
@@ -338,25 +304,20 @@ func (replica *Replica) maybeSendReply(msgCert *MsgCert) {
 }
 
 func (replica *Replica) finalize(msgCert *MsgCert) {
-	// pbft.showTime(msgCert)
 
-	replica.curBatch.counts[4]++
-	if replica.curBatch.counts[4] == KConfig.BoostNum {
-		replica.curBatch.times[4] = time.Now()
+	replica.curBatch.count++
+	if replica.curBatch.count == KConfig.BoostNum {
 		Info("[END] batch | seq=%d", replica.batchSeq)
 
-		// replica.showBatchTime()
-		// replica.exec(KConfig.BoostNum)
+		replica.exec(KConfig.BoostNum)
 		replica.curBatch = &Batch{}
-		replica.curBatch.times[0] = time.Now()
 		replica.batchSeq += 1
 		replica.batchPool[replica.batchSeq] = replica.curBatch
 		replica.boostChan <- replica.batchSeq
 
 		Info("[START] batch | seq=%d", replica.batchSeq)
 	}
-
-	// replica.showTime(msgCert)
+	// 清理，释放内存
 	replica.clearCert(msgCert)
 }
 
@@ -364,17 +325,14 @@ func (replica *Replica) exec(num int) {
 	Info("[START] execute")
 	start := time.Now()
 	sum := int64(0)
-	for j := 0; j < num; j++ {
-		for i := int64(0); i < ExecNum; i++ {
-			sum += i
+	for j := 0; j < KConfig.BoostNum; j++ {
+		for i := 0; i < KConfig.ExecNum; i++ {
+			sum += int64(i)
 		}
 	}
+	execTime := time.Since(start)
 	Trace("Exec result: sum=%d", sum)
 	Info("[END] execute")
-	execTime := time.Since(start)
-	replica.stat.execTimeSum += execTime
-	replica.stat.execTimeCnt++
-
 	Info("execTime=%d", execTime)
 }
 
@@ -385,7 +343,13 @@ func (replica *Replica) clearCert(msgCert *MsgCert) {
 	msgCert.Commits = nil
 }
 
-func (replica *Replica) broadcast(signMsg *SignMessage, msgCert *MsgCert) {
+func (replica *Replica) broadcast(signMsg *SignMessage) {
+	// 如果配置gossip，则使用gossip
+	if KConfig.EnableGossip {
+		replica.gossip(signMsg)
+		return
+	}
+
 	signMsgBytes, err := json.Marshal(signMsg)
 	if err != nil {
 		Error("json.Marshal(signMsg), err: %v", err)
@@ -398,14 +362,52 @@ func (replica *Replica) broadcast(signMsg *SignMessage, msgCert *MsgCert) {
 	}
 }
 
-func (replica *Replica) signMsg(msg *Message) *SignMessage {
-	start := time.Now()
-	signMsg := SignMsg(msg, replica.node.priKey)
-	signTime := time.Since(start)
-	if msg.MsgType == MtPrePrepare {
-		replica.stat.signTimeSum += signTime
-		replica.stat.signTimeCnt++
+func (replica *Replica) gossip(signMsg *SignMessage) bool {
+	// 如果已经发送过，则不发送
+	msgId := GetMsgId(signMsg.Msg)
+	if replica.gossipPool[msgId] {
+		return false
 	}
+	replica.gossipPool[msgId] = true
+
+	signMsg.NodeId = replica.node.id
+	signMsgBytes, err := json.Marshal(signMsg)
+	if err != nil {
+		Error("json.Marshal(signMsg), err: %v", err)
+	}
+
+	// 随机选 KConfig.GossipNum 个节点发送
+	// rand.Seed(time.Now().Unix())
+	// ids := KConfig.PeerIds[:]
+	// rand.Shuffle(len(ids), func(i, j int) {
+	// 	ids[i], ids[j] = ids[j], ids[i]
+	// })
+	// count := 0
+	// for _, id := range ids {
+	// 	node := KConfig.Id2Node[id]
+	// 	if id == replica.node.id || id == fromId || id == signMsg.Msg.NodeId {
+	// 		continue
+	// 	}
+	// 	node.connMgr.sendChan <- signMsgBytes
+	// 	count++
+	// 	if count == KConfig.GossipNum {
+	// 		break
+	// 	}
+	// }
+
+	// 路由表
+	for _, id := range KConfig.RouteMap[replica.node.id] {
+		node := KConfig.Id2Node[id]
+		if id == signMsg.Msg.NodeId {
+			continue
+		}
+		node.connMgr.sendChan <- signMsgBytes
+	}
+	return true
+}
+
+func (replica *Replica) signMsg(msg *Message) *SignMessage {
+	signMsg := SignMsg(msg, replica.node.priKey)
 	return signMsg
 }
 
@@ -427,12 +429,12 @@ func (replica *Replica) boostReq() {
 	if err != nil {
 		Warn("json.Marshal(req), err: %v", err)
 	}
-	Info("req.size=%.2f, ReqNum=%d, boostChan=%d", float64(len(jsonBytes))/MBSize, KConfig.ReqNum, len(replica.boostChan))
+	Info("req.size=%.2fMB, ReqNum=%d, boostChan=%d", float64(len(jsonBytes))/MBSize, KConfig.ReqNum, len(replica.boostChan))
 
 	replica.boostChan <- 0
 
 	Info("[START] batch | seq=%d", replica.batchSeq)
-	prefix := replica.node.id * 10000
+	prefix := replica.node.id * 1000
 
 	time.Sleep(time.Millisecond * time.Duration(KConfig.StartDelay))
 	start := time.Now()
@@ -452,13 +454,24 @@ func (replica *Replica) boostReq() {
 
 		// 直接发送pre-prepare消息
 		replica.sendPrePrepare(msgCert)
-	}
-	Info("all request finish | KConfig.ReqNum=%d, spendTime=%d", KConfig.ReqNum, time.Since(start))
 
-	time.Sleep(time.Second * 60)
+		replica.boostChan <- batchSeq + 1
+	}
+	spend := ToSecond(time.Since(start))
+	Info("all request finish | KConfig.ReqNum=%d, spendTime=%.2f", KConfig.ReqNum, spend)
+
+	// 如果客户端关闭连接则退出
+	for {
+		if KConfig.ClientNode.connMgr.getTcpConn() == nil {
+			break
+		}
+		time.Sleep(time.Second * 60)
+	}
+
 	for _, node := range KConfig.Id2Node {
 		node.connMgr.closeTcpConn()
 	}
+
 	Info("done, exit")
 	os.Exit(1)
 }

@@ -25,6 +25,9 @@ int main(int argc, char **argv) {
         ths.emplace_back([&, ip] {
             auto start = chrono::steady_clock::now();
             char cmd[128];
+            sprintf(cmd, "scp -r %s tongxing@%s:~/lab/%s", src_file, ip.c_str(),
+                    dst_path);
+            printf("%s\n", cmd);
             sprintf(cmd, "sshpass -p tongxing scp -r %s tongxing@%s:~/lab/%s",
                     src_file, ip.c_str(), dst_path);
 
@@ -39,6 +42,9 @@ int main(int argc, char **argv) {
             printf("cmd: %s, spend time: %.2fs\n", cmd, spend.count() / 1000.0);
         });
     }
+
+    this_thread::sleep_for(chrono::seconds(1));
+    printf("\n");
 
     for (auto &th : ths) th.join();
 

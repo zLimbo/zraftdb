@@ -1,5 +1,9 @@
 package pbft
 
+import (
+	"fmt"
+)
+
 type MessageType int
 
 const (
@@ -12,20 +16,20 @@ const (
 	MtProposal
 )
 
-
 type Message struct {
 	MsgType   MessageType `json:"msgType"`
 	Seq       int64       `json:"seq"`
 	NodeId    int64       `json:"nodeId"`
 	Timestamp int64       `json:"timestamp"`
 
-	Tx []byte
+	Tx  []byte
 	Req *Message `json:"req"`
 }
 
 type SignMessage struct {
-	Msg  *Message `json:"msg"`
-	Sign []byte   `json:"sign"`
+	Msg    *Message `json:"msg"`
+	Sign   []byte   `json:"sign"`
+	NodeId int64    `json:"nodeId"`
 }
 
 type SendStatus int
@@ -49,12 +53,10 @@ type MsgCert struct {
 	SendCommit     SendStatus
 	SendReply      SendStatus
 
-	RequestTime    int64
-	PrePrepareTime int64
-	PrepareTime    int64
-	CommitTime     int64
-	Time           int64
-	Time2          int64
+	// RequestTime    int64
+	// PrePrepareTime int64
+	// PrepareTime    int64
+	// CommitTime     int64
 }
 
 func NewMsgCert() *MsgCert {
@@ -82,4 +84,8 @@ func NewReplyCert(seq int64) *ReplyCert {
 		Replys:   make([]*Message, 0),
 		CanApply: false,
 	}
+}
+
+func GetMsgId(msg *Message) string {
+	return fmt.Sprintf("%d%d%d", msg.Seq, msg.NodeId, msg.MsgType)
 }

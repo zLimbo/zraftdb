@@ -1,7 +1,7 @@
 {
-    "peerIps": [
-        "10.11.1.196",
+    "PeerIps": [
         "10.11.1.197",
+        "10.11.1.207",
         "10.11.1.209",
         "10.11.1.210",
         "10.11.1.211",
@@ -11,17 +11,20 @@
         "10.11.7.74",
         "10.11.7.75"
     ],
-    "clientIp": "10.11.1.207",
-    "ipNum": 8,
-    "portBase": 10000,
-    "processNum": 2,
-    "reqNum": 10,
-    "boostNum": -1,
-    "startDelay": 3000,
-    "recvBufSize": 2048,
-    "logStdout": true,
-    "logLevel": 1,
-    "goMaxProcs": 4,
-    "batchTxNum": 1024,
-    "txSize": 256
+    "ClientIp": "10.11.1.196",
+    "IpNum": 8,
+    "PortBase": 10000,
+    "ProcessNum": 2,
+    "ReqNum": 48,
+    "BoostNum": 1,
+    "StartDelay": 3000,
+    "RecvBufSize": 2048,
+    "LogStdout": true,
+    "LogLevel": 1,
+    "GoMaxProcs": 4,
+    "BatchTxNum": 4096,
+    "TxSize": 256,
+    "GossipNum": 3,
+    "EnableGossip": true,
+    "ExecNum": 0
 }

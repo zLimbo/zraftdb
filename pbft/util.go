@@ -2,9 +2,11 @@ package pbft
 
 import (
 	"io/ioutil"
+	"math"
 	"net"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func I2Bytes(num int64, len int) []byte {
@@ -58,9 +60,6 @@ func ReadIps(path string) []string {
 	}
 
 	ips := strings.Split(string(data), "\n")
-	// if len(ips) == 1 {
-	// 	Panic("read KConfig.PeerIps error!")
-	// }
 	return ips
 }
 
@@ -88,4 +87,8 @@ func GetId(ip string, port int) int64 {
 
 	id := prefix*int64(100) + int64(port%100)
 	return id
+}
+
+func ToSecond(td time.Duration) float64 {
+	return float64(td.Nanoseconds()) / math.Pow10(9)
 }

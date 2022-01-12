@@ -1,14 +1,14 @@
 package pbft
 
 import (
+	"os"
 	"time"
 )
 
 type Client struct {
 	Replica
 	replyCertPool map[int64]*ReplyCert
-	applyNum      int
-	startTime     time.Time
+	nApply        int
 }
 
 func NewClient() *Client {
@@ -38,9 +38,12 @@ func (client *Client) getReplyCert(seq int64) *ReplyCert {
 
 func (client *Client) handleReplyMsg() {
 	time.Sleep(time.Millisecond * time.Duration(KConfig.StartDelay))
-	client.startTime = time.Now()
+
+	nTotalReq := KConfig.IpNum * KConfig.ProcessNum * KConfig.ReqNum
+	start := time.Now()
+
 	for signMsg := range kSignMsgChan {
-		// Info("handle reply:", msg)
+		// Trace("handle reply:", msg)
 		node := GetNode(signMsg.Msg.NodeId)
 		if !VerifySignMsg(signMsg, node.pubKey) {
 			Warn("VerifySignMsg(signMsg, node.pubKey) failed")
@@ -61,9 +64,6 @@ func (client *Client) handleReplyMsg() {
 				return
 			}
 			count++
-			// if preMsg.Digest == msg.Digest {
-			// 	count++
-			// }
 		}
 		cert.Replys = append(cert.Replys, msg)
 		Trace("msg.seq=%d, node.id=%d, count=%d", msg.Seq, msg.NodeId, count)
@@ -71,8 +71,36 @@ func (client *Client) handleReplyMsg() {
 			continue
 		}
 		cert.CanApply = true
-		client.applyNum++
-		spend := time.Since(client.startTime)
-		Info("== applyNum=%d, spend=%.2f", client.applyNum, ToSecond(spend))
+		client.nApply++
+		spend := ToSecond(time.Since(start))
+		tps := float64(client.nApply*KConfig.BatchTxNum) / spend
+		traffic := float64(client.nApply*KConfig.BatchTxNum*KConfig.TxSize) / MBSize / spend
+		Info("nApply=%d, spend=%.2f(s), tps=%.2f, traffic=%.2f(MB/s)", client.nApply, spend, tps, traffic)
+
+		if client.nApply == nTotalReq {
+			break
+		}
 	}
+	time.Sleep(time.Second * 10)
+	for _, node := range KConfig.Id2Node {
+		node.connMgr.closeTcpConn()
+	}
+	Info("done, exit")
+	os.Exit(1)
 }
+
+// func getReqSize() float64 {
+// 	req := &Message{
+// 		MsgType:   MtRequest,
+// 		Seq:       1,
+// 		NodeId:    0,
+// 		Timestamp: time.Now().UnixNano(),
+// 		Tx:        make([]byte, KConfig.BatchTxNum*KConfig.TxSize),
+// 	}
+// 	SignMsg(req, node.priKey)
+// 	jsonBytes, err := json.Marshal(req)
+// 	if err != nil {
+// 		Warn("json.Marshal(req), err: %v", err)
+// 	}
+// 	return float64(len(jsonBytes)) / MBSize
+// }
