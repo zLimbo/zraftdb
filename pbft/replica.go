@@ -104,7 +104,7 @@ func (replica *Replica) handleMsg() {
 			replica.stat.commitNum,
 			replica.stat.replyNum,
 			len(kSignMsgChan),
-			kNotConnCnt)
+			kNotConnCount)
 	}
 }
 
@@ -176,15 +176,6 @@ func (replica *Replica) handleCommit(msg *Message) {
 }
 
 func (replica *Replica) recvPrepareMsg(msgCert *MsgCert, msg *Message) {
-	// count := 1
-	// for _, preMsg := range msgCert.Prepares {
-	// 	if preMsg.NodeId == msg.NodeId {
-	// 		return
-	// 	}
-	// 	if preMsg.Digest == msg.Digest {
-	// 		count++
-	// 	}
-	// }
 	msgCert.Prepares = append(msgCert.Prepares, msg)
 	count := len(msgCert.Prepares)
 	Trace("same prepare msg count: %d", count)
@@ -194,15 +185,6 @@ func (replica *Replica) recvPrepareMsg(msgCert *MsgCert, msg *Message) {
 }
 
 func (replica *Replica) recvCommitMsg(msgCert *MsgCert, msg *Message) {
-	// count := 1
-	// for _, preMsg := range msgCert.Commits {
-	// 	if preMsg.NodeId == msg.NodeId {
-	// 		return
-	// 	}
-	// 	if preMsg.Digest == msg.Digest {
-	// 		count++
-	// 	}
-	// }
 	msgCert.Commits = append(msgCert.Commits, msg)
 	count := len(msgCert.Commits)
 	Trace("same commit msg count: %d", count)
@@ -315,7 +297,7 @@ func (replica *Replica) finalize(msgCert *MsgCert) {
 		replica.batchPool[replica.batchSeq] = replica.curBatch
 		replica.boostChan <- replica.batchSeq
 
-		Info("[START] batch | seq=%d", replica.batchSeq)
+		replica.boostChan <- replica.batchSeq + 1
 	}
 	// 清理，释放内存
 	replica.clearCert(msgCert)
@@ -411,6 +393,7 @@ func (replica *Replica) signMsg(msg *Message) *SignMessage {
 	return signMsg
 }
 
+// 自己发请求
 func (replica *Replica) boostReq() {
 
 	if KConfig.ReqNum <= 0 {
@@ -433,17 +416,20 @@ func (replica *Replica) boostReq() {
 
 	replica.boostChan <- 0
 
-	Info("[START] batch | seq=%d", replica.batchSeq)
+	
 	prefix := replica.node.id * 1000
 
 	time.Sleep(time.Millisecond * time.Duration(KConfig.StartDelay))
 	start := time.Now()
 
-	for batchSeq := range replica.boostChan {
-		if batchSeq == int64(KConfig.ReqNum) {
+	for replica.batchSeq = range replica.boostChan {
+		if replica.batchSeq == int64(KConfig.ReqNum) {
 			break
 		}
-		req.Seq = prefix + batchSeq
+
+		Info("[START] batch | seq=%d", replica.batchSeq)
+
+		req.Seq = prefix + replica.batchSeq
 		req.Timestamp = time.Now().UnixNano()
 		// signMsg := replica.signMsg(req)
 		// kSignMsgChan <- signMsg
@@ -454,8 +440,6 @@ func (replica *Replica) boostReq() {
 
 		// 直接发送pre-prepare消息
 		replica.sendPrePrepare(msgCert)
-
-		replica.boostChan <- batchSeq + 1
 	}
 	spend := ToSecond(time.Since(start))
 	Info("all request finish | KConfig.ReqNum=%d, spendTime=%.2f", KConfig.ReqNum, spend)
@@ -465,7 +449,7 @@ func (replica *Replica) boostReq() {
 		if KConfig.ClientNode.connMgr.getTcpConn() == nil {
 			break
 		}
-		time.Sleep(time.Second * 60)
+		time.Sleep(time.Second * 10)
 	}
 
 	for _, node := range KConfig.Id2Node {

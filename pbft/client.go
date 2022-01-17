@@ -81,7 +81,7 @@ func (client *Client) handleReplyMsg() {
 			break
 		}
 	}
-	time.Sleep(time.Second * 10)
+	time.Sleep(time.Second * 3)
 	for _, node := range KConfig.Id2Node {
 		node.connMgr.closeTcpConn()
 	}

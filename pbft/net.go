@@ -20,7 +20,7 @@ var (
 	kSignMsgChan   = make(chan *SignMessage, ChanSize)
 	kWaitConnChan  = make(chan *Node, ChanSize)
 	kSendFailCount = 0
-	kNotConnCnt    = 0
+	kNotConnCount    = 0
 )
 
 type ConnMgr struct {
@@ -161,9 +161,9 @@ func (connMgr *ConnMgr) handleMsg() {
 
 func (replica *Replica) keep() {
 	for {
-		kNotConnCnt = 0
+		kNotConnCount = 0
 		if KConfig.ClientNode.connMgr.getTcpConn() == nil {
-			kNotConnCnt++
+			kNotConnCount++
 			kWaitConnChan <- KConfig.ClientNode
 		}
 		for id, node := range KConfig.Id2Node {
@@ -171,11 +171,11 @@ func (replica *Replica) keep() {
 				continue
 			}
 			if node.connMgr.getTcpConn() == nil {
-				kNotConnCnt++
+				kNotConnCount++
 				kWaitConnChan <- node
 			}
 		}
-		if kNotConnCnt != 0 {
+		if kNotConnCount != 0 {
 			time.Sleep(time.Second * 1)
 		} else {
 			time.Sleep(time.Second * 5)

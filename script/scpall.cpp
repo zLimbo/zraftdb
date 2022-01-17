@@ -25,12 +25,12 @@ int main(int argc, char **argv) {
         ths.emplace_back([&, ip] {
             auto start = chrono::steady_clock::now();
             char cmd[128];
-            sprintf(cmd, "scp -r %s tongxing@%s:~/lab/%s", src_file, ip.c_str(),
-                    dst_path);
-            printf("%s\n", cmd);
-            sprintf(cmd, "sshpass -p tongxing scp -r %s tongxing@%s:~/lab/%s",
-                    src_file, ip.c_str(), dst_path);
-
+            // sprintf(cmd, "sshpass -p tongxing scp -r %s
+            // tongxing@%s:~/lab/%s",
+            //         src_file, ip.c_str(), dst_path);
+            sprintf(cmd, "sshpass -p z scp -r %s z@%s:~/lab/%s", src_file,
+                    ip.c_str(), dst_path);
+            // printf("%s\n", cmd);
             FILE *pp = popen(cmd, "r");  // build pipe
             if (!pp) {
                 printf("popen error, cmd: %s (len=%ld)\n", cmd, strlen(cmd));
@@ -43,8 +43,8 @@ int main(int argc, char **argv) {
         });
     }
 
-    this_thread::sleep_for(chrono::seconds(1));
-    printf("\n");
+    // this_thread::sleep_for(chrono::seconds(20));
+    // printf("\n");
 
     for (auto &th : ths) th.join();
 

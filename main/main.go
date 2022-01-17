@@ -2,15 +2,10 @@ package main
 
 import (
 	"flag"
-	"log"
 	"runtime"
 
 	"zpbft/pbft"
 )
-
-func init() {
-	log.SetFlags(log.Ltime | log.Lshortfile)
-}
 
 func main() {
 	var configFile string

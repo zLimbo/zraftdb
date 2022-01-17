@@ -105,6 +105,6 @@ func TestGenCert(t *testing.T) {
 	ips := pbft.ReadIps("ips.txt")
 	fmt.Println("ips:", ips)
 
-	GenRsaKeys(ips, 19, 8)
+	GenRsaKeys(ips, 7, 8)
 	fmt.Println("gen certs ok")
 }
