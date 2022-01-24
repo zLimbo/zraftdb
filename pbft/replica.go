@@ -71,7 +71,7 @@ func (replica *Replica) handleMsg() {
 	for signMsg := range kSignMsgChan {
 
 		// 若有配置，采用 gossip 转发
-		if KConfig.EnableGossip {
+		if KConfig.EnableGossip && signMsg.Msg.MsgType == MtPrePrepare {
 			ok := replica.gossip(signMsg)
 			// 如果未进行gossip发送，说明该消息已经被本节点处理
 			if !ok {
@@ -119,10 +119,10 @@ func (replica *Replica) getMsgCert(seq int64) *MsgCert {
 }
 
 func (replica *Replica) handleRequest(msg *Message) {
-	Trace("msg.seq=%d, tx.size=%d", msg.Seq, len(msg.Tx))
+	Debug("msg.seq=%d, tx.size=%d", msg.Seq, len(msg.Tx))
 	msgCert := replica.getMsgCert(msg.Seq)
 	if msgCert.Req != nil {
-		Trace("this request msg[seq=%d] has been accepted", msg.Seq)
+		Debug("this request msg[seq=%d] has been accepted", msg.Seq)
 		return
 	}
 
@@ -136,10 +136,10 @@ func (replica *Replica) handleRequest(msg *Message) {
 }
 
 func (replica *Replica) handlePrePrepare(msg *Message) {
-	Trace("msg.seq=%d, tx.size=%d", msg.Seq, len(msg.Tx))
+	Debug("msg.seq=%d, tx.size=%d", msg.Seq, len(msg.Tx))
 	msgCert := replica.getMsgCert(msg.Seq)
 	if msgCert.PrePrepare != nil {
-		Trace("this pre-prepare msg[seq=%d] has been accepted", msg.Seq)
+		Debug("this pre-prepare msg[seq=%d] has been accepted", msg.Seq)
 		return
 	}
 	if msgCert.SendPrepare == HasSend {
@@ -160,7 +160,7 @@ func (replica *Replica) handlePrepare(msg *Message) {
 	if msgCert.SendCommit == HasSend {
 		return
 	}
-	Trace("msg.Seq=%d, msg.NodeId=%d", msg.Seq, msg.NodeId)
+	Debug("msg.Seq=%d, msg.NodeId=%d", msg.Seq, msg.NodeId)
 	replica.recvPrepareMsg(msgCert, msg)
 	replica.maybeSendCommit(msgCert)
 }
@@ -170,7 +170,7 @@ func (replica *Replica) handleCommit(msg *Message) {
 	if msgCert.SendReply == HasSend {
 		return
 	}
-	Trace("msg.Seq=%d, msg.NodeId=%d", msg.Seq, msg.NodeId)
+	Debug("msg.Seq=%d, msg.NodeId=%d", msg.Seq, msg.NodeId)
 	replica.recvCommitMsg(msgCert, msg)
 	replica.maybeSendReply(msgCert)
 }
@@ -178,7 +178,7 @@ func (replica *Replica) handleCommit(msg *Message) {
 func (replica *Replica) recvPrepareMsg(msgCert *MsgCert, msg *Message) {
 	msgCert.Prepares = append(msgCert.Prepares, msg)
 	count := len(msgCert.Prepares)
-	Trace("same prepare msg count: %d", count)
+	Debug("same prepare msg count: %d", count)
 	if count >= 2*KConfig.FalultNum {
 		msgCert.SendCommit = WaitSend
 	}
@@ -187,7 +187,7 @@ func (replica *Replica) recvPrepareMsg(msgCert *MsgCert, msg *Message) {
 func (replica *Replica) recvCommitMsg(msgCert *MsgCert, msg *Message) {
 	msgCert.Commits = append(msgCert.Commits, msg)
 	count := len(msgCert.Commits)
-	Trace("same commit msg count: %d", count)
+	Debug("same commit msg count: %d", count)
 	if count >= 2*KConfig.FalultNum+1 {
 		msgCert.SendReply = WaitSend
 	}
@@ -205,7 +205,7 @@ func (replica *Replica) sendPrePrepare(msgCert *MsgCert) {
 	replica.broadcast(signMsg)
 	msgCert.SendPrePrepare = HasSend
 
-	Trace("[pre-prepare] msg has been sent.")
+	Debug("[pre-prepare] msg has been sent.")
 	Info("[END] pre-prepare | seq=%d", msgCert.Seq)
 
 	msgCert.SendPrepare = HasSend
@@ -226,7 +226,7 @@ func (replica *Replica) sendPrepare(msgCert *MsgCert) {
 	replica.broadcast(signMsg)
 	msgCert.SendPrepare = HasSend
 	replica.stat.prePrepareNum++
-	Trace("[prepare] msg has been sent.")
+	Debug("[prepare] msg has been sent.")
 
 	replica.maybeSendCommit(msgCert)
 }
@@ -250,7 +250,7 @@ func (replica *Replica) maybeSendCommit(msgCert *MsgCert) {
 	signMsg := replica.signMsg(commitMsg)
 	replica.broadcast(signMsg)
 	msgCert.SendCommit = HasSend
-	Trace("commit msg has been sent.")
+	Debug("commit msg has been sent.")
 
 	replica.maybeSendReply(msgCert)
 }
@@ -278,7 +278,7 @@ func (replica *Replica) maybeSendReply(msgCert *MsgCert) {
 	KConfig.ClientNode.connMgr.sendChan <- signMsgBytes
 	msgCert.SendReply = HasSend
 
-	Trace("reply msg has been sent, seq=%d", msgCert.Seq)
+	Debug("reply msg has been sent, seq=%d", msgCert.Seq)
 	Info("[END] reply | seq=%d, reply_count=%d", msgCert.Seq, replica.stat.replyNum)
 
 	replica.stat.replyNum++
@@ -295,9 +295,8 @@ func (replica *Replica) finalize(msgCert *MsgCert) {
 		replica.curBatch = &Batch{}
 		replica.batchSeq += 1
 		replica.batchPool[replica.batchSeq] = replica.curBatch
-		replica.boostChan <- replica.batchSeq
 
-		replica.boostChan <- replica.batchSeq + 1
+		// replica.boostChan <- replica.batchSeq + 1
 	}
 	// 清理，释放内存
 	replica.clearCert(msgCert)
@@ -313,7 +312,7 @@ func (replica *Replica) exec(num int) {
 		}
 	}
 	execTime := time.Since(start)
-	Trace("Exec result: sum=%d", sum)
+	Debug("Exec result: sum=%d", sum)
 	Info("[END] execute")
 	Info("execTime=%d", execTime)
 }
@@ -327,10 +326,16 @@ func (replica *Replica) clearCert(msgCert *MsgCert) {
 
 func (replica *Replica) broadcast(signMsg *SignMessage) {
 	// 如果配置gossip，则使用gossip
-	if KConfig.EnableGossip {
+	if KConfig.EnableGossip && signMsg.Msg.MsgType == MtPrePrepare {
 		replica.gossip(signMsg)
 		return
 	}
+
+	msgId := GetMsgId(signMsg.Msg)
+	if replica.gossipPool[msgId] {
+		return
+	}
+	replica.gossipPool[msgId] = true
 
 	signMsgBytes, err := json.Marshal(signMsg)
 	if err != nil {
@@ -416,7 +421,6 @@ func (replica *Replica) boostReq() {
 
 	replica.boostChan <- 0
 
-	
 	prefix := replica.node.id * 1000
 
 	time.Sleep(time.Millisecond * time.Duration(KConfig.StartDelay))
@@ -440,9 +444,11 @@ func (replica *Replica) boostReq() {
 
 		// 直接发送pre-prepare消息
 		replica.sendPrePrepare(msgCert)
+
+		// time.Sleep(time.Millisecond * time.Duration(rand.Intn(3)*100+500))
+		replica.boostChan <- replica.batchSeq + 1
 	}
 	spend := ToSecond(time.Since(start))
-	Info("all request finish | KConfig.ReqNum=%d, spendTime=%.2f", KConfig.ReqNum, spend)
 
 	// 如果客户端关闭连接则退出
 	for {
@@ -455,7 +461,7 @@ func (replica *Replica) boostReq() {
 	for _, node := range KConfig.Id2Node {
 		node.connMgr.closeTcpConn()
 	}
-
+	Info("all request finish | KConfig.ReqNum=%d, spendTime=%.2f", KConfig.ReqNum, spend)
 	Info("done, exit")
 	os.Exit(1)
 }

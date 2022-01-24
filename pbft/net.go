@@ -59,7 +59,7 @@ func (connMgr *ConnMgr) setTcpConn(tcpConn net.Conn) bool {
 	}
 	connMgr.tcpConn = tcpConn
 	if connMgr.tcpConn != nil {
-		Trace("connect ok, local: %s, remote: %s", tcpConn.LocalAddr(), tcpConn.RemoteAddr())
+		Debug("connect ok, local: %s, remote: %s", tcpConn.LocalAddr(), tcpConn.RemoteAddr())
 		go connMgr.send()
 		go connMgr.recv()
 	}
@@ -190,7 +190,7 @@ func (replica *Replica) listen() {
 		Error("net.Listen(\"tcp4\", addr), err: %v", err)
 	}
 	defer listener.Close()
-	Trace(replica.node.addr + "listen...")
+	Debug(replica.node.addr + "listen...")
 	for {
 		tcpConn, err := listener.Accept()
 		if err != nil {
@@ -234,7 +234,7 @@ func (replica *Replica) connect() {
 		if node.connMgr.getTcpConn() != nil {
 			continue
 		}
-		Trace("dial %s ...", node.addr)
+		Debug("dial %s ...", node.addr)
 		tcpConn, err := net.Dial("tcp4", node.addr)
 		if err != nil {
 			Warn("dial %s failed", node.addr)

@@ -13,7 +13,7 @@ import (
 )
 
 func ReadKeyPair(keyDir string) ([]byte, []byte) {
-	Trace("read key pair from %s", keyDir)
+	Debug("read key pair from %s", keyDir)
 	priKey, err := ioutil.ReadFile(keyDir + "/rsa.pri.pem")
 	if err != nil {
 		Error("err: %v", err)

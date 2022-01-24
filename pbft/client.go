@@ -66,7 +66,7 @@ func (client *Client) handleReplyMsg() {
 			count++
 		}
 		cert.Replys = append(cert.Replys, msg)
-		Trace("msg.seq=%d, node.id=%d, count=%d", msg.Seq, msg.NodeId, count)
+		Debug("msg.seq=%d, node.id=%d, count=%d", msg.Seq, msg.NodeId, count)
 		if count < KConfig.FalultNum+1 {
 			continue
 		}

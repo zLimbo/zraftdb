@@ -8,7 +8,7 @@ import (
 type LogLevel int
 
 const (
-	TraceLevel LogLevel = iota
+	DebugLevel LogLevel = iota
 	InfoLevel
 	WarnLevel
 	ErrorLevel
@@ -18,11 +18,11 @@ func init() {
 	log.SetFlags(log.Ltime | log.Lshortfile)
 }
 
-func Trace(format string, v ...interface{}) {
-	if KConfig.LogLevel > TraceLevel {
+func Debug(format string, v ...interface{}) {
+	if KConfig.LogLevel > DebugLevel {
 		return
 	}
-	log.Output(2, fmt.Sprintf("TRACE| "+format, v...))
+	log.Output(2, fmt.Sprintf("Debug| "+format, v...))
 }
 
 func Info(format string, v ...interface{}) {

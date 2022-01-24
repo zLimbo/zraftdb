@@ -32,7 +32,6 @@ type Config struct {
 	GossipNum    int      `json:"GossipNum"`
 	EnableGossip bool     `json:"EnableGossip"`
 	ExecNum      int      `json:"ExecNum"`
-	
 
 	Id2Node    map[int64]*Node
 	ClientNode *Node
@@ -51,7 +50,7 @@ func InitConfig(configFile string) {
 	if err != nil {
 		Error("read %s failed.", configFile)
 	}
-	Trace("config: ", string(jsonBytes))
+	Debug("config: ", string(jsonBytes))
 	err = json.Unmarshal(jsonBytes, &KConfig)
 	if err != nil {
 		Error("json.Unmarshal(jsonBytes, &KConfig) err: %v", err)
@@ -84,28 +83,32 @@ func InitConfig(configFile string) {
 	}
 
 	// 默认 gossipNum 为 3
-	if KConfig.EnableGossip && KConfig.GossipNum <= 0 {
-		KConfig.GossipNum = 3
-	}
-
-	// 配置路由表
-	peerNum := KConfig.IpNum * KConfig.ProcessNum
-	KConfig.RouteMap = make(map[int64][]int64)
-	for k, i := 1, 0; i < peerNum; i++ {
-		fromId := KConfig.PeerIds[i]
-		KConfig.RouteMap[fromId] = make([]int64, 0, 3)
-		if k == peerNum {
-			continue
+	if KConfig.EnableGossip {
+		if KConfig.GossipNum <= 0 {
+			KConfig.GossipNum = 3
 		}
-		for j := 0; j < KConfig.GossipNum; j++ {
-			// if k == i {
-			// 	k = (k + 1) % peerNum
-			// }
-			KConfig.RouteMap[fromId] = append(KConfig.RouteMap[fromId], KConfig.PeerIds[k])
-			// k = (k + 1) % peerNum
-			k++
+
+		// 配置路由表
+		peerNum := KConfig.IpNum * KConfig.ProcessNum
+		KConfig.RouteMap = make(map[int64][]int64)
+		for k, i := 1, 0; i < peerNum; i++ {
+			fromId := KConfig.PeerIds[i]
+			KConfig.RouteMap[fromId] = make([]int64, 0, 3)
 			if k == peerNum {
-				break
+				continue
+			}
+			for j := 0; j < KConfig.GossipNum; j++ {
+				// if k == i {
+				// 	k = (k + 1) % peerNum
+				// }
+				// KConfig.RouteMap[fromId] = append(KConfig.RouteMap[fromId], KConfig.PeerIds[k])
+				// k = (k + 1) % peerNum
+
+				KConfig.RouteMap[fromId] = append(KConfig.RouteMap[fromId], KConfig.PeerIds[k])
+				k++
+				if k == peerNum {
+					break
+				}
 			}
 		}
 	}
