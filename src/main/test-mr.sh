@@ -35,7 +35,7 @@ failed_any=0
 
 # generate the correct output
 ../mrsequential ../../mrapps/wc.so ../pg*txt || exit 1
-sort mr-out-0 > mr-correct-wc.txt
+sort mr-out-0 >mr-correct-wc.txt
 rm -f mr-out*
 
 echo '***' Starting wc test.
@@ -56,9 +56,8 @@ wait $pid
 
 # since workers are required to exit when a job is completely finished,
 # and not before, that means the job has finished.
-sort mr-out* | grep . > mr-wc-all
-if cmp mr-wc-all mr-correct-wc.txt
-then
+sort mr-out* | grep . >mr-wc-all
+if cmp mr-wc-all mr-correct-wc.txt; then
   echo '---' wc test: PASS
 else
   echo '---' wc output is not the same as mr-correct-wc.txt
@@ -69,13 +68,15 @@ fi
 # wait for remaining workers and coordinator to exit.
 wait
 
+# exit debug
+
 #########################################################
 # now indexer
 rm -f mr-*
 
 # generate the correct output
 ../mrsequential ../../mrapps/indexer.so ../pg*txt || exit 1
-sort mr-out-0 > mr-correct-indexer.txt
+sort mr-out-0 >mr-correct-indexer.txt
 rm -f mr-out*
 
 echo '***' Starting indexer test.
@@ -87,9 +88,8 @@ sleep 1
 timeout -k 2s 180s ../mrworker ../../mrapps/indexer.so &
 timeout -k 2s 180s ../mrworker ../../mrapps/indexer.so
 
-sort mr-out* | grep . > mr-indexer-all
-if cmp mr-indexer-all mr-correct-indexer.txt
-then
+sort mr-out* | grep . >mr-indexer-all
+if cmp mr-indexer-all mr-correct-indexer.txt; then
   echo '---' indexer test: PASS
 else
   echo '---' indexer output is not the same as mr-correct-indexer.txt
@@ -110,16 +110,14 @@ sleep 1
 timeout -k 2s 180s ../mrworker ../../mrapps/mtiming.so &
 timeout -k 2s 180s ../mrworker ../../mrapps/mtiming.so
 
-NT=`cat mr-out* | grep '^times-' | wc -l | sed 's/ //g'`
-if [ "$NT" != "2" ]
-then
+NT=$(cat mr-out* | grep '^times-' | wc -l | sed 's/ //g')
+if [ "$NT" != "2" ]; then
   echo '---' saw "$NT" workers rather than 2
   echo '---' map parallelism test: FAIL
   failed_any=1
 fi
 
-if cat mr-out* | grep '^parallel.* 2' > /dev/null
-then
+if cat mr-out* | grep '^parallel.* 2' >/dev/null; then
   echo '---' map parallelism test: PASS
 else
   echo '---' map workers did not run in parallel
@@ -128,7 +126,6 @@ else
 fi
 
 wait
-
 
 #########################################################
 echo '***' Starting reduce parallelism test.
@@ -141,9 +138,8 @@ sleep 1
 timeout -k 2s 180s ../mrworker ../../mrapps/rtiming.so &
 timeout -k 2s 180s ../mrworker ../../mrapps/rtiming.so
 
-NT=`cat mr-out* | grep '^[a-z] 2' | wc -l | sed 's/ //g'`
-if [ "$NT" -lt "2" ]
-then
+NT=$(cat mr-out* | grep '^[a-z] 2' | wc -l | sed 's/ //g')
+if [ "$NT" -lt "2" ]; then
   echo '---' too few parallel reduces.
   echo '---' reduce parallelism test: FAIL
   failed_any=1
@@ -166,9 +162,8 @@ timeout -k 2s 180s ../mrworker ../../mrapps/jobcount.so
 timeout -k 2s 180s ../mrworker ../../mrapps/jobcount.so &
 timeout -k 2s 180s ../mrworker ../../mrapps/jobcount.so
 
-NT=`cat mr-out* | awk '{print $2}'`
-if [ "$NT" -ne "8" ]
-then
+NT=$(cat mr-out* | awk '{print $2}')
+if [ "$NT" -ne "8" ]; then
   echo '---' map jobs ran incorrect number of times "($NT != 8)"
   echo '---' job count test: FAIL
   failed_any=1
@@ -177,6 +172,8 @@ else
 fi
 
 wait
+
+# exit 8
 
 #########################################################
 # test whether any worker or coordinator exits before the
@@ -198,20 +195,19 @@ timeout -k 2s 180s ../mrworker ../../mrapps/early_exit.so &
 # wait for any of the coord or workers to exit
 # `jobs` ensures that any completed old processes from other tests
 # are not waited upon
-jobs &> /dev/null
+jobs &>/dev/null
 wait -n
 
 # a process has exited. this means that the output should be finalized
 # otherwise, either a worker or the coordinator exited early
-sort mr-out* | grep . > mr-wc-all-initial
+sort mr-out* | grep . >mr-wc-all-initial
 
 # wait for remaining workers and coordinator to exit.
 wait
 
 # compare initial and final outputs
-sort mr-out* | grep . > mr-wc-all-final
-if cmp mr-wc-all-final mr-wc-all-initial
-then
+sort mr-out* | grep . >mr-wc-all-final
+if cmp mr-wc-all-final mr-wc-all-initial; then
   echo '---' early exit test: PASS
 else
   echo '---' output changed after first worker exited
@@ -225,33 +221,33 @@ echo '***' Starting crash test.
 
 # generate the correct output
 ../mrsequential ../../mrapps/nocrash.so ../pg*txt || exit 1
-sort mr-out-0 > mr-correct-crash.txt
+sort mr-out-0 >mr-correct-crash.txt
 rm -f mr-out*
 
 rm -f mr-done
-(timeout -k 2s 180s ../mrcoordinator ../pg*txt ; touch mr-done ) &
+(
+  timeout -k 2s 180s ../mrcoordinator ../pg*txt
+  touch mr-done
+) &
 sleep 1
 
 # start multiple workers
 timeout -k 2s 180s ../mrworker ../../mrapps/crash.so &
 
 # mimic rpc.go's coordinatorSock()
-SOCKNAME=/var/tmp/824-mr-`id -u`
+SOCKNAME=/var/tmp/824-mr-$(id -u)
 
-( while [ -e $SOCKNAME -a ! -f mr-done ]
-  do
-    timeout -k 2s 180s ../mrworker ../../mrapps/crash.so
-    sleep 1
-  done ) &
+(while [ -e $SOCKNAME -a ! -f mr-done ]; do
+  timeout -k 2s 180s ../mrworker ../../mrapps/crash.so
+  sleep 1
+done) &
 
-( while [ -e $SOCKNAME -a ! -f mr-done ]
-  do
-    timeout -k 2s 180s ../mrworker ../../mrapps/crash.so
-    sleep 1
-  done ) &
+(while [ -e $SOCKNAME -a ! -f mr-done ]; do
+  timeout -k 2s 180s ../mrworker ../../mrapps/crash.so
+  sleep 1
+done) &
 
-while [ -e $SOCKNAME -a ! -f mr-done ]
-do
+while [ -e $SOCKNAME -a ! -f mr-done ]; do
   timeout -k 2s 180s ../mrworker ../../mrapps/crash.so
   sleep 1
 done
@@ -259,9 +255,8 @@ done
 wait
 
 rm $SOCKNAME
-sort mr-out* | grep . > mr-crash-all
-if cmp mr-crash-all mr-correct-crash.txt
-then
+sort mr-out* | grep . >mr-crash-all
+if cmp mr-crash-all mr-correct-crash.txt; then
   echo '---' crash test: PASS
 else
   echo '---' crash output is not the same as mr-correct-crash.txt
@@ -271,8 +266,8 @@ fi
 
 #########################################################
 if [ $failed_any -eq 0 ]; then
-    echo '***' PASSED ALL TESTS
+  echo '***' PASSED ALL TESTS
 else
-    echo '***' FAILED SOME TESTS
-    exit 1
+  echo '***' FAILED SOME TESTS
+  exit 1
 fi

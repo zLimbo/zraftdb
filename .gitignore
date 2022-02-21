@@ -1,3 +1,7 @@
+*
+!*.*
+!*/
+
 pkg/
 api.key
 .api.key.trimmed
