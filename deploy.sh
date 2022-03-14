@@ -6,10 +6,10 @@ servers=(
     "219.228.148.80"
     "219.228.148.89"
     "219.228.148.129"
-    "219.228.148.169"
-    "219.228.148.181"
-    "219.228.148.222"
-    "219.228.148.231"
+    # "219.228.148.169"
+    # "219.228.148.181"
+    # "219.228.148.222"
+    # "219.228.148.231"
 )
 
 function deployClient() {
@@ -18,7 +18,8 @@ function deployClient() {
     printf "deploy zpbft in %-16s ..." ${client}
     start=$(date +%s)
     sshpass -p z scp bin/zpbft z@${client}:~/zpbft/zpbft
-    sshpass -p z scp -r certs z@${client}:~/zpbft/certs
+    sshpass -p z scp rpbft/rpbft z@${client}:~/zpbft/rpbft
+    # sshpass -p z scp -r certs z@${client}:~/zpbft/certs
     echo ${client} >config/local_ip.txt
     sshpass -p z scp -r config/config.json z@${client}:~/zpbft/config/config.json
     end=$(date +%s)
@@ -33,6 +34,7 @@ function deployServer() {
         printf "deploy zpbft in %-16s ..." ${srv}
         start=$(date +%s)
         sshpass -p z scp bin/zpbft z@${srv}:~/zpbft/zpbft
+        sshpass -p z scp rpbft/rpbft z@${srv}:~/zpbft/rpbft
         # sshpass -p z scp -r certs z@${srv}:~/zpbft/certs
         echo ${srv} >config/local_ip.txt
         sshpass -p z scp -r config/config.json z@${srv}:~/zpbft/config/config.json
@@ -49,6 +51,9 @@ if (($# == 0)); then
 fi
 
 go build -o bin/zpbft main/main.go
+cd rpbft
+go build .
+cd ..
 
 if [ $1 == "a" ]; then
     deployClient
