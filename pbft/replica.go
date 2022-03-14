@@ -296,7 +296,7 @@ func (replica *Replica) finalize(msgCert *MsgCert) {
 		replica.batchSeq += 1
 		replica.batchPool[replica.batchSeq] = replica.curBatch
 
-		// replica.boostChan <- replica.batchSeq + 1
+		replica.boostChan <- replica.batchSeq + 1
 	}
 	// 清理，释放内存
 	replica.clearCert(msgCert)
@@ -446,7 +446,7 @@ func (replica *Replica) boostReq() {
 		replica.sendPrePrepare(msgCert)
 
 		// time.Sleep(time.Millisecond * time.Duration(rand.Intn(3)*100+500))
-		replica.boostChan <- replica.batchSeq + 1
+		// replica.boostChan <- replica.batchSeq + 1
 	}
 	spend := ToSecond(time.Since(start))
 
