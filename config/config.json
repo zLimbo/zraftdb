@@ -9,7 +9,7 @@
     "IpNum": 4,
     "PortBase": 10000,
     "ProcessNum": 1,
-    "ReqNum": 100,
+    "ReqNum": 1000,
     "BoostNum": 4,
     "StartDelay": 3000,
     "RecvBufSize": 2048,

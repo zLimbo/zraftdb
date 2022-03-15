@@ -35,5 +35,4 @@ type ReqCert struct {
 	digest     []byte
 	start      time.Time
 	replyCount int
-
 }
