@@ -84,3 +84,24 @@ func InitConfig() {
 func IsClient() bool {
 	return KConfig.LocalIp == KConfig.ClientIp
 }
+
+func GetNode(id int64) *Node {
+	
+	if id == KConfig.ClientNode.id {
+		return KConfig.ClientNode
+	}
+	node, ok := KConfig.Id2Node[id]
+	if !ok {
+		Error("The node of this ID(%d) does not exist!", id)
+	}
+	return node
+}
+
+func GetIndex(nodeId int64) int {
+	for idx, id := range KConfig.PeerIds {
+		if nodeId == id {
+			return idx
+		}
+	}
+	return -1
+}

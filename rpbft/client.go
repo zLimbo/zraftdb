@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/rand"
 	"net/http"
 	"net/rpc"
 	"sync"
@@ -18,28 +19,49 @@ type Client struct {
 	coch       chan interface{}
 }
 
-type ReplyArgs struct {
-	NodeId int64
-	Seq    int64
-	Ok     bool
-	Digest []byte
-	Sign   []byte
+func (c *Client) getCertOrNew(seq int64) *CmdCert {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cert, ok := c.seq2cert[seq]
+	if !ok {
+		cert = &CmdCert{
+			seq:    seq,
+			start:  time.Now(),
+			replys: make(map[int64][]byte),
+		}
+		c.seq2cert[seq] = cert
+	}
+	return cert
 }
 
 func (c *Client) ReplyRpc(args *ReplyArgs, reply *bool) error {
-	Debug("ReplyRpc, seq: %d, from: %d", args.Seq, args.NodeId)
-	*reply = true
+	msg := args.Msg
+	Debug("ReplyRpc, seq: %d, from: %d", msg.Seq, msg.NodeId)
+	*reply = false
 
+	if msg.ClientId != c.node.id {
+		Warn("ReplyMsg msg.ClientId == c.node.id")
+		return nil
+	}
+	
+	node := GetNode(msg.NodeId)
+	digest := Sha256Digest(msg)
+	ok := RsaVerifyWithSha256(digest, args.Sign, node.pubKey)
+	if !ok {
+		Warn("ReplyMsg verify error, seq: %d, from: %d", msg.Seq, msg.NodeId)
+		return nil
+	}
 	// measure
+
+	cert := c.getCertOrNew(msg.Seq)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	cert := c.seq2cert[args.Seq]
-	_, ok := cert.replys[args.NodeId]
+	_, ok = cert.replys[msg.NodeId]
 	if ok {
 		return nil
 	}
-	cert.replys[args.NodeId] = args.Sign
+	cert.replys[msg.NodeId] = args.Sign
 	replyCount := len(cert.replys)
 
 	// Debug("replyCount: %d, f+1: %d", replyCount, KConfig.FalultNum+1)
@@ -54,9 +76,10 @@ func (c *Client) ReplyRpc(args *ReplyArgs, reply *bool) error {
 	avgLatency := float64(c.sumLatency) / float64(c.applyCount)
 
 	Info("apply: %d seq: %d take: %.2f tps: %.0f curLa: %d avgLa: %.2f",
-		c.applyCount, args.Seq, take, tps, latency.Milliseconds(), avgLatency)
+		c.applyCount, msg.Seq, take, tps, latency.Milliseconds(), avgLatency)
 
-	c.coch <- args.Seq
+	// c.coch <- args.Seq
+	*reply = true
 	return nil
 }
 
@@ -79,53 +102,59 @@ func (c *Client) connect(coch chan<- interface{}) {
 		}
 	}
 	Info("\n== connect success ==")
+	time.Sleep(time.Millisecond * 200)
 	coch <- 1
 }
 
 func (c *Client) sendReq(coch <-chan interface{}) {
 	<-coch
 	Info("start send req")
-	c.start = time.Now()
 
-	args := &RequestArgs{
-		NodeId: c.node.id,
-		Cmd: &Command{
-			Seq:    0,
-			FromId: c.node.id,
-			Tx:     make([]byte, KConfig.BatchTxNum*KConfig.TxSize),
-		},
+	
+	req := &RequestMsg{
+		Operator: make([]byte, KConfig.BatchTxNum*KConfig.TxSize),
+		Timestamp: time.Now().UnixNano(),
+		ClientId: c.node.id,
 	}
-	before := time.Now()
-	args.Digest = Sha256Digest(args.Cmd)
-	digestTake := time.Since(before)
-	before = time.Now()
-	args.Sign = RsaSignWithSha256(args.Digest, c.node.priKey)
-	signTake := time.Since(before)
-	Info("digest: %.2f (s), sign: %.2f (s)", ToSecond(digestTake), ToSecond(signTake))
+	digest := Sha256Digest(req)
+	sign := RsaSignWithSha256(digest, c.node.priKey)
+	args := &RequestArgs{
+		Req: req,
+		Sign: sign,
+	}
 
-	var reply bool
-	for i := 0; i < KConfig.ReqNum; i++ {
-		seq := c.node.id*1000 + int64(i)
+	peerNum := len(KConfig.PeerIds)
+	c.start = time.Now()
+	cnt := 0
+	for i := 0; i < KConfig.BoostNum; i++ {
+		go func() {
+			for i := 0; i < KConfig.ReqNum; i++ {
+				randId := KConfig.PeerIds[rand.Intn(peerNum)]
+				srvCli := c.id2srvCli[randId]
 
-		c.mu.Lock()
-		c.seq2cert[seq] = &CmdCert{
-			seq:    seq,
-			start:  time.Now(),
-			replys: make(map[int64][]byte),
-		}
-		c.mu.Unlock()
+				reply := &RequestReply{}
+				start := time.Now()
 
-		args.Cmd.Seq = seq
-		for id, srvCli := range c.id2srvCli {
-			Debug("send req %d to node %d", seq, id)
-			err := srvCli.Call("Server.RequestRpc", args, &reply)
-			if err != nil {
-				Error("Server.RequestRpc err: %v", err)
+				err := srvCli.Call("Server.RequestRpc", args, &reply)
+				if err != nil {
+					Warn("Server.RequestRpc err: %v", err)
+				}
+				if !reply.Ok {
+					Warn("verify error.")
+				}
+				seq := reply.Seq
+				cert := c.getCertOrNew(seq)
+
+				c.mu.Lock()
+				cert.start = start
+				cert.digest = digest
+				cnt++
+				cnt2 := cnt
+				c.mu.Unlock()
+
+				Info("send %d req to node %d, assign seq: %d", cnt2, randId, seq)
 			}
-			break
-		}
-
-		<-c.coch
+		}()
 	}
 }
 
