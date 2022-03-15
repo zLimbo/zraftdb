@@ -19,15 +19,15 @@ const (
 )
 
 type CmdCert struct {
-	seq        int64
-	digest     []byte
-	start      time.Time
-	replys     map[int64][]byte
+	seq    int64
+	digest []byte
+	start  time.Time
+	replys map[int64][]byte
 }
 
 type LogCert struct {
 	seq      int64
-	view int64
+	view     int64
 	req      *RequestArgs
 	digest   []byte
 	prepares map[int64]*PrepareArgs
@@ -126,68 +126,68 @@ func (lc *LogCert) commitBallot() int {
 }
 
 type RequestMsg struct {
-	Operator []byte
+	Operator  []byte
 	Timestamp int64
-	ClientId int64
+	ClientId  int64
 }
 
 type PrePrepareMsg struct {
-	View int64
-	Seq int64
+	View   int64
+	Seq    int64
 	Digest []byte
 	NodeId int64
 }
 
 type PrepareMsg struct {
-	View int64
-	Seq int64
+	View   int64
+	Seq    int64
 	Digest []byte
 	NodeId int64
 }
 
 type CommitMsg struct {
-	View int64
-	Seq int64
+	View   int64
+	Seq    int64
 	Digest []byte
 	NodeId int64
 }
 
 type ReplyMsg struct {
-	View int64
-	Seq int64
+	View      int64
+	Seq       int64
 	Timestamp int64
-	ClientId int64
-	NodeId int64
-	Result []byte
+	ClientId  int64
+	NodeId    int64
+	Result    []byte
 }
 
 type RequestArgs struct {
-	Req *RequestMsg
-	Sign   []byte
+	Req  *RequestMsg
+	Sign []byte
 }
 
 type RequestReply struct {
 	Seq int64
-	Ok bool
+	Ok  bool
 }
 
 type PrePrepareArgs struct {
-	Msg *PrePrepareMsg
-	Sign   []byte
+	Msg     *PrePrepareMsg
+	Sign    []byte
 	ReqArgs *RequestArgs
 }
 
 type PrepareArgs struct {
-	Msg *PrepareMsg
-	Sign   []byte
+	Msg  *PrepareMsg
+	Sign []byte
 }
 
 type CommitArgs struct {
-	Msg *CommitMsg
-	Sign   []byte
+	Msg  *CommitMsg
+	Sign []byte
 }
 
 type ReplyArgs struct {
-	Msg *ReplyMsg
-	Sign   []byte
+	Msg  *ReplyMsg
+	Sign []byte
 }

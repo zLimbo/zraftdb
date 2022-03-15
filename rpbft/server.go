@@ -18,7 +18,7 @@ type Server struct {
 	cliCli    *rpc.Client
 	mu        sync.Mutex
 	seqInc    int64
-	view int64
+	view      int64
 }
 
 func (s *Server) assignSeq() int64 {
@@ -36,7 +36,7 @@ func (s *Server) getCertOrNew(seq int64) *LogCert {
 			prepares: make(map[int64]*PrepareArgs),
 			commits:  make(map[int64]*CommitArgs),
 			prepareQ: make([]*PrepareArgs, 0),
-			commitQ: make([]*CommitArgs, 0),
+			commitQ:  make([]*CommitArgs, 0),
 		}
 		s.seq2cert[seq] = cert
 	}
@@ -45,7 +45,7 @@ func (s *Server) getCertOrNew(seq int64) *LogCert {
 
 func (s *Server) RequestRpc(args *RequestArgs, reply *RequestReply) error {
 	// 放入请求队列直接返回，后续异步通知客户端
-	
+
 	Debug("RequestRpc, from: %d", args.Req.ClientId)
 
 	// 验证RequestMsg
@@ -73,8 +73,8 @@ func (s *Server) RequestRpc(args *RequestArgs, reply *RequestReply) error {
 func (s *Server) PrePrepare(seq int64) {
 	req, digest, view := s.getCertOrNew(seq).get()
 	msg := &PrePrepareMsg{
-		View: view,
-		Seq: seq,
+		View:   view,
+		Seq:    seq,
 		Digest: digest,
 		NodeId: s.node.id,
 	}
@@ -82,8 +82,8 @@ func (s *Server) PrePrepare(seq int64) {
 	sign := RsaSignWithSha256(digest, s.node.priKey)
 	// 配置rpc参数
 	args := &PrePrepareArgs{
-		Msg: msg,
-		Sign: sign,
+		Msg:     msg,
+		Sign:    sign,
 		ReqArgs: req,
 	}
 
@@ -130,7 +130,7 @@ func (s *Server) PrePrepareRpc(args *PrePrepareArgs, reply *bool) error {
 		Warn("RequestMsg verify error, seq: %d, from: %d", msg.Seq, msg.NodeId)
 		return nil
 	}
-	
+
 	// 设置证明
 	cert := s.getCertOrNew(msg.Seq)
 	cert.set(reqArgs, digest, msg.View)
@@ -149,8 +149,8 @@ func (s *Server) PrePrepareRpc(args *PrePrepareArgs, reply *bool) error {
 func (s *Server) Prepare(seq int64) {
 	_, digest, view := s.getCertOrNew(seq).get()
 	msg := &PrepareMsg{
-		View: view,
-		Seq: seq,
+		View:   view,
+		Seq:    seq,
 		Digest: digest,
 		NodeId: s.node.id,
 	}
@@ -158,7 +158,7 @@ func (s *Server) Prepare(seq int64) {
 	sign := RsaSignWithSha256(digest, s.node.priKey)
 	// 配置rpc参数,相比PrePrepare无需req
 	args := &PrepareArgs{
-		Msg: msg,
+		Msg:  msg,
 		Sign: sign,
 	}
 	for id, srvCli := range s.id2srvCli {
@@ -190,8 +190,8 @@ func (s *Server) Commit(seq int64) {
 	// cmd := s.getCertOrNew(seq).getCmd() // req一定存在
 	_, digest, view := s.getCertOrNew(seq).get()
 	msg := &CommitMsg{
-		View: view,
-		Seq: seq,
+		View:   view,
+		Seq:    seq,
 		Digest: digest,
 		NodeId: s.node.id,
 	}
@@ -199,7 +199,7 @@ func (s *Server) Commit(seq int64) {
 	sign := RsaSignWithSha256(digest, s.node.priKey)
 	// 配置rpc参数,相比PrePrepare无需req
 	args := &CommitArgs{
-		Msg: msg,
+		Msg:  msg,
 		Sign: sign,
 	}
 	for id, srvCli := range s.id2srvCli {
@@ -308,17 +308,17 @@ func (s *Server) Reply(seq int64) {
 	Debug("Reply %d", seq)
 	req, _, view := s.getCertOrNew(seq).get()
 	msg := &ReplyMsg{
-		View: view,
-		Seq: seq,
+		View:      view,
+		Seq:       seq,
 		Timestamp: time.Now().UnixNano(),
-		ClientId: req.Req.ClientId,
-		NodeId: s.node.id,
-		Result: req.Req.Operator,
+		ClientId:  req.Req.ClientId,
+		NodeId:    s.node.id,
+		Result:    req.Req.Operator,
 	}
 	digest := Sha256Digest(msg)
 	sign := RsaSignWithSha256(digest, s.node.priKey)
 	replyArgs := &ReplyArgs{
-		Msg: msg,
+		Msg:  msg,
 		Sign: sign,
 	}
 	var reply bool

@@ -43,7 +43,7 @@ func (c *Client) ReplyRpc(args *ReplyArgs, reply *bool) error {
 		Warn("ReplyMsg msg.ClientId == c.node.id")
 		return nil
 	}
-	
+
 	node := GetNode(msg.NodeId)
 	digest := Sha256Digest(msg)
 	ok := RsaVerifyWithSha256(digest, args.Sign, node.pubKey)
@@ -110,16 +110,15 @@ func (c *Client) sendReq(coch <-chan interface{}) {
 	<-coch
 	Info("start send req")
 
-	
 	req := &RequestMsg{
-		Operator: make([]byte, KConfig.BatchTxNum*KConfig.TxSize),
+		Operator:  make([]byte, KConfig.BatchTxNum*KConfig.TxSize),
 		Timestamp: time.Now().UnixNano(),
-		ClientId: c.node.id,
+		ClientId:  c.node.id,
 	}
 	digest := Sha256Digest(req)
 	sign := RsaSignWithSha256(digest, c.node.priKey)
 	args := &RequestArgs{
-		Req: req,
+		Req:  req,
 		Sign: sign,
 	}
 
