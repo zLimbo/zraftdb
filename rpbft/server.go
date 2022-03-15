@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"net/rpc"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -13,76 +12,105 @@ type Server struct {
 	node      *Node
 	seqCh     chan int64
 	logs      []*Log
-	seq2cert  map[int64]*MsgCert
-	seq2index map[int64]int // seq -> logIndex
+	seq2cert  map[int64]*LogCert
 	id2srvCli map[int64]*rpc.Client
 	cliCli    *rpc.Client
 	mu        sync.Mutex
 }
 
 type RequestArgs struct {
-	Req    *Request
+	NodeId int64
+	Cmd    *Command
 	Digest []byte
 	Sign   []byte
 }
 
-func (s *Server) getCert(seq int64) (*MsgCert, bool) {
+func (s *Server) getCertOrNew(seq int64) *LogCert {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cert, ok := s.seq2cert[seq]
-	return cert, ok
-}
-
-func (s *Server) setCert(req *Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.seq2cert[req.Seq] = &MsgCert{
-		req: req,
+	if !ok {
+		cert = &LogCert{
+			prepares: make(map[int64][]byte),
+			commits:  make(map[int64][]byte),
+		}
+		s.seq2cert[seq] = cert
 	}
+	return cert
 }
 
 func (s *Server) RequestRpc(args *RequestArgs, reply *bool) error {
-
+	Debug("RequestRpc, seq: %d, from: %d", args.Cmd.Seq, args.NodeId)
 	// 放入请求队列直接返回，后续异步通知客户端
 
-	s.seq2cert[args.Req.Seq] = &MsgCert{
-		req: args.Req,
-	}
-	s.seqCh <- args.Req.Seq
+	cmd := args.Cmd
+	s.getCertOrNew(cmd.Seq).setCmd(cmd)
+	s.seqCh <- cmd.Seq
 	*reply = true
 
 	return nil
 }
 
+func (s *Server) ballot(cert *LogCert) {
+	cmd := cert.getCmd()
+
+	// cmd 为空则不进行后续阶段
+	if cmd == nil {
+		Debug("march, cmd is nil")
+		return
+	}
+	Debug("march, seq: %d, prepare: %d, commit: %d, stage: %d",
+		cert.cmd.Seq, cert.prepareBallot(), cert.commitBallot(), cert.getStage())
+
+	switch cert.getStage() {
+	case PrepareStage:
+		// 2f + 1 (包括自身) 后进入 commit 阶段
+		if cert.prepareBallot() >= 2*KConfig.FalultNum {
+			cert.setStage(CommitStage)
+			go s.Commit(cmd.Seq)
+		}
+		fallthrough // 进入后续判断
+	case CommitStage:
+		// 2f + 1 (包括自身) 后进入 reply 阶段
+		if cert.commitBallot() >= 2*KConfig.FalultNum {
+			cert.setStage(ReplyStage)
+			go s.Reply(cmd.Seq)
+		}
+	}
+}
+
 type PrePrepareArgs struct {
-	Req    *Request
+	NodeId int64
+	Cmd    *Command
 	Digest []byte
 	Sign   []byte
 }
 
 func (s *Server) PrePrepareRpc(args *PrePrepareArgs, reply *bool) error {
-	Debug("PrePrepare %d", args.Req.Seq)
+	Debug("PrePrepareRpc, seq: %d, from: %d", args.Cmd.Seq, args.NodeId)
 	*reply = true
 
-	s.setCert(args.Req)
+	cmd := args.Cmd
+	cert := s.getCertOrNew(cmd.Seq)
+	cert.setCmd(cmd)
 
-	go s.Prepare(args.Req.Seq)
+	go s.Prepare(cmd.Seq)
+	s.ballot(cert)
+
 	return nil
 }
 
 func (s *Server) PrePrepare(seq int64) {
-	cert, _ := s.getCert(seq)
-	req := cert.req
+	cmd := s.getCertOrNew(seq).getCmd()
+
+	args := &PrePrepareArgs{
+		NodeId: s.node.id,
+		Cmd:    cmd,
+	}
 	// 等待发完2f个节点再进入下一阶段
-	// var wg sync.WaitGroup
 	for id, srvCli := range s.id2srvCli {
-		// wg.Add(1)
 		id1, srvCli1 := id, srvCli
 		go func() { // 异步发送
-			// defer wg.Done()
-			args := &PrePrepareArgs{
-				Req: req,
-			}
 			var reply bool
 			err := srvCli1.Call("Server.PrePrepareRpc", args, &reply)
 			if err != nil {
@@ -90,124 +118,75 @@ func (s *Server) PrePrepare(seq int64) {
 			}
 		}()
 	}
-	Debug("PrePrepare %d ok", req.Seq)
-	// wg.Wait()
-	s.Prepare(req.Seq)
+	Debug("PrePrepare %d ok", cmd.Seq)
+	s.Prepare(cmd.Seq)
 }
 
 type PrepareArgs struct {
+	NodeId int64
 	Seq    int64
 	Digest []byte
 	Sign   []byte
 }
 
 func (s *Server) PrepareRpc(args *PrepareArgs, reply *bool) error {
-	Debug("PrepareRpc %d", args.Seq)
+	Debug("PrepareRpc, seq: %d, from: %d", args.Seq, args.NodeId)
 
-	cert, ok := s.getCert(args.Seq)
-	if !ok {
-		*reply = false
-		return nil
-	}
 	*reply = true
-
-	// 增加投票数
-	atomic.AddInt32(&cert.prepareBallot, 1)
-	ballot := atomic.LoadInt32(&cert.prepareBallot)
-	stage := atomic.LoadInt32(&cert.stage)
-
-	// 2f + 1 (包括自身) 后进入 commit 阶段
-	if int(ballot) >= 2*KConfig.FalultNum && stage < CommitStage {
-		atomic.StoreInt32(&cert.stage, CommitStage)
-		go s.Commit(args.Seq)
-	}
+	cert := s.getCertOrNew(args.Seq)
+	cert.prepareVote(args)
+	s.ballot(cert)
 
 	return nil
 }
 
 func (s *Server) Prepare(seq int64) {
-	var req *Request
-	repeat := 0
-	for {
-		cert, ok := s.getCert(seq)
-		if ok {
-			req = cert.req
-			break
-		}
-		repeat++
-		if repeat == 10 {
-			return
-		}
-		time.Sleep(time.Millisecond * 100)
-	}
+	cmd := s.getCertOrNew(seq).getCmd() // req一定存在
 
+	args := &PrepareArgs{
+		NodeId: s.node.id,
+		Seq:    cmd.Seq,
+	}
 	for id, srvCli := range s.id2srvCli {
 		id1, srvCli1 := id, srvCli
 		go func() { // 异步发送
-			args := &PrepareArgs{
-				Seq: req.Seq,
-			}
 			var reply bool
-			for {
-				err := srvCli1.Call("Server.PrepareRpc", args, &reply)
-				if err != nil {
-					Error("Server.PrepareRpc %d error: %v", id1, err)
-				}
-				if reply {
-					break
-				}
-				// reply为false说明该节点无req
-				args1 := &PrePrepareArgs{
-					Req: req,
-				}
-				err = srvCli1.Call("Server.PrePrepareRpc", args1, &reply)
-				if err != nil {
-					Error("Server.PrepareRpc %d error: %v", id1, err)
-				}
+			err := srvCli1.Call("Server.PrepareRpc", args, &reply)
+			if err != nil {
+				Error("Server.PrepareRpc %d error: %v", id1, err)
 			}
 		}()
 	}
 }
 
 type CommitArgs struct {
+	NodeId int64
 	Seq    int64
 	Digest []byte
 	Sign   []byte
 }
 
-func (s *Server) CommitRpc(args *PrepareArgs, reply *bool) error {
-	Debug("CommitRpc %d", args.Seq)
-	cert, ok := s.getCert(args.Seq)
-	if !ok {
-		*reply = false
-		return nil
-	}
+func (s *Server) CommitRpc(args *CommitArgs, reply *bool) error {
+	Debug("CommitRpc, seq: %d, from: %d", args.Seq, args.NodeId)
+
 	*reply = true
-
-	// 增加投票数
-	atomic.AddInt32(&cert.commitBallot, 1)
-	ballot := atomic.LoadInt32(&cert.commitBallot)
-	stage := atomic.LoadInt32(&cert.stage)
-
-	// 2f + 1 (包括自身) 后进入 reply 阶段
-	if int(ballot) >= 2*KConfig.FalultNum && stage < ReplyStage {
-		atomic.StoreInt32(&cert.stage, ReplyStage)
-		go s.Reply(args.Seq)
-	}
+	cert := s.getCertOrNew(args.Seq)
+	cert.commitVote(args)
+	s.ballot(cert)
 
 	return nil
 }
 
 func (s *Server) Commit(seq int64) {
-	cert, _ := s.getCert(seq)
-	req := cert.req
+	cmd := s.getCertOrNew(seq).getCmd() // req一定存在
 
+	args := &CommitArgs{
+		NodeId: s.node.id,
+		Seq:    cmd.Seq,
+	}
 	for id, srvCli := range s.id2srvCli {
 		id1, srvCli1 := id, srvCli
 		go func() { // 异步发送
-			args := &CommitArgs{
-				Seq: req.Seq,
-			}
 			var reply bool
 			err := srvCli1.Call("Server.CommitRpc", args, &reply)
 			if err != nil {
@@ -220,8 +199,9 @@ func (s *Server) Commit(seq int64) {
 func (s *Server) Reply(seq int64) {
 	Debug("Reply %d", seq)
 	replyArgs := &ReplyArgs{
-		Seq: seq,
-		Ok:  true,
+		NodeId: s.node.id,
+		Seq:    seq,
+		Ok:     true,
 	}
 	var reply bool
 	err := s.cliCli.Call("Client.ReplyRpc", replyArgs, &reply)
@@ -273,8 +253,6 @@ func (s *Server) workLoop(coch <-chan interface{}) {
 
 	for seq := range s.seqCh {
 		s.PrePrepare(seq)
-		// s.seq2Req[req.Seq] = req
-		// s.pbft(PrePrepareStage, req.Seq)
 	}
 }
 
@@ -283,8 +261,7 @@ func runServer(id int64) {
 		node:      KConfig.Id2Node[id],
 		seqCh:     make(chan int64, ChanSize),
 		logs:      make([]*Log, 0),
-		seq2cert:  make(map[int64]*MsgCert),
-		seq2index: make(map[int64]int),
+		seq2cert:  make(map[int64]*LogCert),
 		id2srvCli: make(map[int64]*rpc.Client),
 	}
 	coch := make(chan interface{})

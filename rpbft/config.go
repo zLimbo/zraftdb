@@ -74,7 +74,10 @@ func InitConfig() {
 	KConfig.FalultNum = (len(KConfig.Id2Node) - 1) / 3
 
 	// 设置本地IP和客户端
-	KConfig.ClientNode = NewNode(KConfig.ClientIp, KConfig.PortBase, nil, nil)
+	id := GetId(KConfig.ClientIp, KConfig.PortBase+1)
+	keyDir := KCertsDir + "/" + fmt.Sprint(id)
+	priKey, pubKey := ReadKeyPair(keyDir)
+	KConfig.ClientNode = NewNode(KConfig.ClientIp, KConfig.PortBase+1, priKey, pubKey)
 	KConfig.LocalIp = GetLocalIp()
 }
 

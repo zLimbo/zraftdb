@@ -15,7 +15,7 @@ servers=(
 function deployClient() {
     printf "\n[deployClient]\n"
 
-    printf "deploy zpbft in %-16s ..." ${client}
+    printf "deploy client in %-16s ..." ${client}
     start=$(date +%s)
     sshpass -p z scp bin/zpbft z@${client}:~/zpbft/zpbft
     sshpass -p z scp rpbft/rpbft z@${client}:~/zpbft/rpbft
@@ -24,14 +24,14 @@ function deployClient() {
     sshpass -p z scp -r config/config.json z@${client}:~/zpbft/config/config.json
     end=$(date +%s)
     take=$((end - start))
-    printf "\rdeploy zpbft in %-16s ok, take %ds\n" ${client} ${take}
+    printf "\rdeploy client in %-16s ok, take %ds\n" ${client} ${take}
 }
 
 function deployServer() {
     printf "\n[deployServer]\n"
 
     for srv in ${servers[@]}; do
-        printf "deploy zpbft in %-16s ..." ${srv}
+        printf "deploy server in %-16s ..." ${srv}
         start=$(date +%s)
         sshpass -p z scp bin/zpbft z@${srv}:~/zpbft/zpbft
         sshpass -p z scp rpbft/rpbft z@${srv}:~/zpbft/rpbft
@@ -40,7 +40,7 @@ function deployServer() {
         sshpass -p z scp -r config/config.json z@${srv}:~/zpbft/config/config.json
         end=$(date +%s)
         take=$((end - start))
-        printf "\rdeploy zpbft in %-16s ok, take %ds\n" ${srv} ${take}
+        printf "\rdeploy server in %-16s ok, take %ds\n" ${srv} ${take}
     done
 }
 
@@ -50,10 +50,16 @@ if (($# == 0)); then
     exit
 fi
 
-go build -o bin/zpbft main/main.go
+printf "\n[compile]\n"
+printf "compile zpbft, rpbft ..."
+start=$(date +%s)
+go build -race -o bin/zpbft main/main.go
 cd rpbft
-go build .
+go build -race .
 cd ..
+end=$(date +%s)
+take=$((end - start))
+printf "\rcompile zpbft, rpbft ok, take %ds\n" ${take}
 
 if [ $1 == "a" ]; then
     deployClient

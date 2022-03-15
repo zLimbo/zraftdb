@@ -15,7 +15,7 @@ const (
 )
 
 func init() {
-	log.SetFlags(log.Ltime | log.Lshortfile)
+	log.SetFlags(log.Lshortfile)
 }
 
 func Debug(format string, v ...interface{}) {
