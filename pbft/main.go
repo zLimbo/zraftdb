@@ -12,7 +12,7 @@ func main() {
 
 		Info("start client...")
 		runtime.GOMAXPROCS(runtime.NumCPU())
-		runClient()
+		RunClient()
 
 	} else {
 		var processIdx int
@@ -23,7 +23,7 @@ func main() {
 		runtime.GOMAXPROCS(KConfig.GoMaxProcs)
 		nodeId := GetId(KConfig.LocalIp, KConfig.PortBase+processIdx)
 
-		runServer(nodeId)
+		RunServer(nodeId)
 
 	}
 }

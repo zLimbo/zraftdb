@@ -374,7 +374,7 @@ func (s *Server) workLoop(coch <-chan interface{}) {
 	}
 }
 
-func runServer(id int64) {
+func RunServer(id int64) {
 	server := &Server{
 		node:      KConfig.Id2Node[id],
 		seqCh:     make(chan int64, ChanSize),

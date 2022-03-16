@@ -1,4 +1,4 @@
-package pbft
+package main
 
 import (
 	"encoding/json"
@@ -43,12 +43,12 @@ type Config struct {
 
 var KConfig Config
 
-func InitConfig(configFile string) {
+func InitConfig() {
 
 	// 读取 json
-	jsonBytes, err := ioutil.ReadFile(configFile)
+	jsonBytes, err := ioutil.ReadFile(KConfigFile)
 	if err != nil {
-		Error("read %s failed.", configFile)
+		Error("read %s failed.", KConfigFile)
 	}
 	Debug("config: ", string(jsonBytes))
 	err = json.Unmarshal(jsonBytes, &KConfig)
@@ -74,46 +74,11 @@ func InitConfig(configFile string) {
 	KConfig.FalultNum = (len(KConfig.Id2Node) - 1) / 3
 
 	// 设置本地IP和客户端
-	KConfig.ClientNode = NewNode(KConfig.ClientIp, KConfig.PortBase, nil, nil)
+	id := GetId(KConfig.ClientIp, KConfig.PortBase+1)
+	keyDir := KCertsDir + "/" + fmt.Sprint(id)
+	priKey, pubKey := ReadKeyPair(keyDir)
+	KConfig.ClientNode = NewNode(KConfig.ClientIp, KConfig.PortBase+1, priKey, pubKey)
 	KConfig.LocalIp = GetLocalIp()
-
-	// 发送请求的节点数
-	if KConfig.BoostNum == -1 {
-		KConfig.BoostNum = KConfig.IpNum * KConfig.ProcessNum
-	}
-
-	// 默认 gossipNum 为 3
-	if KConfig.EnableGossip {
-		if KConfig.GossipNum <= 0 {
-			KConfig.GossipNum = 3
-		}
-
-		// 配置路由表
-		peerNum := KConfig.IpNum * KConfig.ProcessNum
-		KConfig.RouteMap = make(map[int64][]int64)
-		for k, i := 1, 0; i < peerNum; i++ {
-			fromId := KConfig.PeerIds[i]
-			KConfig.RouteMap[fromId] = make([]int64, 0, 3)
-			if k == peerNum {
-				continue
-			}
-			for j := 0; j < KConfig.GossipNum; j++ {
-				// if k == i {
-				// 	k = (k + 1) % peerNum
-				// }
-				// KConfig.RouteMap[fromId] = append(KConfig.RouteMap[fromId], KConfig.PeerIds[k])
-				// k = (k + 1) % peerNum
-
-				KConfig.RouteMap[fromId] = append(KConfig.RouteMap[fromId], KConfig.PeerIds[k])
-				k++
-				if k == peerNum {
-					break
-				}
-			}
-		}
-	}
-
-	Info("config ok. KConfig: %v", KConfig)
 }
 
 func IsClient() bool {
@@ -121,8 +86,9 @@ func IsClient() bool {
 }
 
 func GetNode(id int64) *Node {
-	if KConfig.Id2Node == nil {
-		Error("KConfig.Id2Node is not initialized!")
+
+	if id == KConfig.ClientNode.id {
+		return KConfig.ClientNode
 	}
 	node, ok := KConfig.Id2Node[id]
 	if !ok {

@@ -1,106 +1,176 @@
-package pbft
+package main
 
 import (
-	"os"
+	"math/rand"
+	"net/http"
+	"net/rpc"
+	"sync"
 	"time"
 )
 
 type Client struct {
-	Replica
-	replyCertPool map[int64]*ReplyCert
-	nApply        int
+	node       *Node
+	applyCount int32
+	start      time.Time
+	id2srvCli  map[int64]*rpc.Client
+	seq2cert   map[int64]*CmdCert
+	sumLatency int64
+	mu         sync.Mutex
+	coch       chan interface{}
 }
 
-func NewClient() *Client {
-	client := &Client{
-		replyCertPool: make(map[int64]*ReplyCert),
-	}
-	client.node = KConfig.ClientNode
-	return client
-}
-
-func (client *Client) Start() {
-	go client.listen()
-	go client.handleReplyMsg()
-	// go client.connStatus()
-
-	select {}
-}
-
-func (client *Client) getReplyCert(seq int64) *ReplyCert {
-	cert, ok := client.replyCertPool[seq]
+func (c *Client) getCertOrNew(seq int64) *CmdCert {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cert, ok := c.seq2cert[seq]
 	if !ok {
-		cert = NewReplyCert(seq)
-		client.replyCertPool[seq] = cert
+		cert = &CmdCert{
+			seq:    seq,
+			start:  time.Now(),
+			replys: make(map[int64][]byte),
+		}
+		c.seq2cert[seq] = cert
 	}
 	return cert
 }
 
-func (client *Client) handleReplyMsg() {
-	time.Sleep(time.Millisecond * time.Duration(KConfig.StartDelay))
+func (c *Client) ReplyRpc(args *ReplyArgs, reply *bool) error {
+	msg := args.Msg
+	Debug("ReplyRpc, seq: %d, from: %d", msg.Seq, msg.NodeId)
+	*reply = false
 
-	nTotalReq := KConfig.IpNum * KConfig.ProcessNum * KConfig.ReqNum
-	start := time.Now()
-
-	for signMsg := range kSignMsgChan {
-		// Trace("handle reply:", msg)
-		node := GetNode(signMsg.Msg.NodeId)
-		if !VerifySignMsg(signMsg, node.pubKey) {
-			Warn("VerifySignMsg(signMsg, node.pubKey) failed")
-			continue
-		}
-		msg := signMsg.Msg
-		if msg.MsgType != MtReply {
-			Warn("it's not reply!")
-			continue
-		}
-		cert := client.getReplyCert(msg.Seq)
-		if cert.CanApply {
-			continue
-		}
-		count := 1
-		for _, preMsg := range cert.Replys {
-			if preMsg.NodeId == msg.NodeId {
-				return
-			}
-			count++
-		}
-		cert.Replys = append(cert.Replys, msg)
-		Debug("msg.seq=%d, node.id=%d, count=%d", msg.Seq, msg.NodeId, count)
-		if count < KConfig.FalultNum+1 {
-			continue
-		}
-		cert.CanApply = true
-		client.nApply++
-		spend := ToSecond(time.Since(start))
-		tps := float64(client.nApply*KConfig.BatchTxNum) / spend
-		traffic := float64(client.nApply*KConfig.BatchTxNum*KConfig.TxSize) / MBSize / spend
-		Info("nApply=%d, spend=%.2f(s), tps=%.2f, traffic=%.2f(MB/s)", client.nApply, spend, tps, traffic)
-
-		if client.nApply == nTotalReq {
-			break
-		}
+	if msg.ClientId != c.node.id {
+		Warn("ReplyMsg msg.ClientId == c.node.id")
+		return nil
 	}
-	time.Sleep(time.Second * 3)
-	for _, node := range KConfig.Id2Node {
-		node.connMgr.closeTcpConn()
+
+	node := GetNode(msg.NodeId)
+	digest := Sha256Digest(msg)
+	ok := RsaVerifyWithSha256(digest, args.Sign, node.pubKey)
+	if !ok {
+		Warn("ReplyMsg verify error, seq: %d, from: %d", msg.Seq, msg.NodeId)
+		return nil
 	}
-	Info("done, exit")
-	os.Exit(1)
+	// measure
+
+	cert := c.getCertOrNew(msg.Seq)
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok = cert.replys[msg.NodeId]
+	if ok {
+		return nil
+	}
+	cert.replys[msg.NodeId] = args.Sign
+	replyCount := len(cert.replys)
+
+	// Debug("replyCount: %d, f+1: %d", replyCount, KConfig.FalultNum+1)
+	if replyCount != KConfig.FalultNum+1 {
+		return nil
+	}
+	c.applyCount++
+	take := ToSecond(time.Since(c.start))
+	tps := float64(KConfig.BatchTxNum*int(c.applyCount)) / take
+	latency := time.Since(cert.start)
+	c.sumLatency += latency.Milliseconds()
+	avgLatency := float64(c.sumLatency) / float64(c.applyCount)
+
+	Info("apply: %d seq: %d take: %.2f tps: %.0f curLa: %d avgLa: %.2f",
+		c.applyCount, msg.Seq, take, tps, latency.Milliseconds(), avgLatency)
+
+	// c.coch <- args.Seq
+	*reply = true
+	return nil
 }
 
-// func getReqSize() float64 {
-// 	req := &Message{
-// 		MsgType:   MtRequest,
-// 		Seq:       1,
-// 		NodeId:    0,
-// 		Timestamp: time.Now().UnixNano(),
-// 		Tx:        make([]byte, KConfig.BatchTxNum*KConfig.TxSize),
-// 	}
-// 	SignMsg(req, node.priKey)
-// 	jsonBytes, err := json.Marshal(req)
-// 	if err != nil {
-// 		Warn("json.Marshal(req), err: %v", err)
-// 	}
-// 	return float64(len(jsonBytes)) / MBSize
-// }
+func (c *Client) connect(coch chan<- interface{}) {
+	ok := false
+	for !ok {
+		time.Sleep(time.Second) // 每隔一秒进行连接
+		ok = true
+		for id, node := range KConfig.Id2Node {
+			if c.id2srvCli[id] == nil {
+				cli, err := rpc.DialHTTP("tcp", node.addr)
+				if err != nil {
+					Info("connect %d error: %v", node.addr, err)
+					ok = false
+				} else {
+					c.id2srvCli[id] = cli
+				}
+
+			}
+		}
+	}
+	Info("\n== connect success ==")
+	time.Sleep(time.Millisecond * 200)
+	coch <- 1
+}
+
+func (c *Client) sendReq(coch <-chan interface{}) {
+	<-coch
+	Info("start send req")
+
+	req := &RequestMsg{
+		Operator:  make([]byte, KConfig.BatchTxNum*KConfig.TxSize),
+		Timestamp: time.Now().UnixNano(),
+		ClientId:  c.node.id,
+	}
+	digest := Sha256Digest(req)
+	sign := RsaSignWithSha256(digest, c.node.priKey)
+	args := &RequestArgs{
+		Req:  req,
+		Sign: sign,
+	}
+
+	peerNum := len(KConfig.PeerIds)
+	c.start = time.Now()
+	cnt := 0
+	for i := 0; i < KConfig.BoostNum; i++ {
+		go func() {
+			for i := 0; i < KConfig.ReqNum; i++ {
+				randId := KConfig.PeerIds[rand.Intn(peerNum)]
+				srvCli := c.id2srvCli[randId]
+
+				reply := &RequestReply{}
+				start := time.Now()
+
+				err := srvCli.Call("Server.RequestRpc", args, &reply)
+				if err != nil {
+					Warn("Server.RequestRpc err: %v", err)
+				}
+				if !reply.Ok {
+					Warn("verify error.")
+				}
+				seq := reply.Seq
+				cert := c.getCertOrNew(seq)
+
+				c.mu.Lock()
+				cert.start = start
+				cert.digest = digest
+				cnt++
+				cnt2 := cnt
+				c.mu.Unlock()
+
+				Info("send %d req to node %d, assign seq: %d", cnt2, randId, seq)
+			}
+		}()
+	}
+}
+
+func RunClient() {
+	client := &Client{
+		node:      KConfig.ClientNode,
+		id2srvCli: make(map[int64]*rpc.Client),
+		seq2cert:  make(map[int64]*CmdCert),
+		coch:      make(chan interface{}, 100),
+	}
+	coch := make(chan interface{})
+	go client.connect(coch)
+	go client.sendReq(coch)
+
+	rpc.Register(client)
+	rpc.HandleHTTP()
+	if err := http.ListenAndServe(client.node.addr, nil); err != nil {
+		Error("client listen err: %v", err)
+	}
+}

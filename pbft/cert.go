@@ -1,158 +1,193 @@
-package pbft
+package main
 
 import (
-	"crypto"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/json"
-	"encoding/pem"
-	"errors"
-	"io/ioutil"
+	"sync"
+	"sync/atomic"
+	"time"
 )
 
-func ReadKeyPair(keyDir string) ([]byte, []byte) {
-	Debug("read key pair from %s", keyDir)
-	priKey, err := ioutil.ReadFile(keyDir + "/rsa.pri.pem")
-	if err != nil {
-		Error("err: %v", err)
-	}
-	pubKey, err := ioutil.ReadFile(keyDir + "/rsa.pub.pem")
-	if err != nil {
-		Error("err: %v", err)
-	}
-	return priKey, pubKey
+type Log struct {
+	op []byte
 }
 
-func RsaSignWithSha256(data []byte, keyBytes []byte) []byte {
-	h := sha256.New()
-	h.Write(data)
-	hashed := h.Sum(nil)
-	block, _ := pem.Decode(keyBytes)
-	if block == nil {
-		panic(errors.New("private key error"))
-	}
-	privateKey, err := x509.ParsePKCS1PrivateKey(block.Bytes)
-	if err != nil {
-		Error("x509.ParsePKCS1PrivateKey(block.Bytes), err: %v", err)
-	}
+type Stage = int32
 
-	signature, err := rsa.SignPKCS1v15(rand.Reader, privateKey, crypto.SHA256, hashed)
-	if err != nil {
-		Error("Error from signing: %v", err)
-	}
+const (
+	PrepareStage = iota
+	CommitStage
+	ReplyStage
+)
 
-	return signature
+type CmdCert struct {
+	seq    int64
+	digest []byte
+	start  time.Time
+	replys map[int64][]byte
 }
 
-func RsaVerifyWithSha256(data, sign, keyBytes []byte) bool {
-	block, _ := pem.Decode(keyBytes)
-	if block == nil {
-		Error("public key error")
-	}
-	pubKey, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		Error("x509.ParsePKIXPublicKey(block.Bytes), err: %v", err)
-	}
-
-	hashed := sha256.Sum256(data)
-	err = rsa.VerifyPKCS1v15(pubKey.(*rsa.PublicKey), crypto.SHA256, hashed[:], sign)
-	if err != nil {
-		Error("rsa.VerifyPKCS1v15(...), err: %v", err)
-	}
-	return true
+type LogCert struct {
+	seq      int64
+	view     int64
+	req      *RequestArgs
+	digest   []byte
+	prepares map[int64]*PrepareArgs
+	commits  map[int64]*CommitArgs
+	prepareQ []*PrepareArgs
+	commitQ  []*CommitArgs
+	stage    Stage
+	mu       sync.Mutex
 }
 
-func Sha256Digest(msg interface{}) []byte {
-	msgBytes := JsonMarshal(msg)
-
-	sha256 := sha256.New()
-	sha256.Write(msgBytes)
-
-	return sha256.Sum(nil)
+func (lc *LogCert) set(req *RequestArgs, digest []byte, view int64) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.req = req
+	lc.digest = digest
 }
 
-func JsonMarshal(msg interface{}) []byte {
-	msgBytes, err := json.Marshal(msg)
-	if err != nil {
-		Error("json.Marshal(msg), err: %v", err)
-	}
-	return msgBytes
+func (lc *LogCert) get() (*RequestArgs, []byte, int64) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return lc.req, lc.digest, lc.view
 }
 
-func VerifySignMsg(signMsg *SignMessage, pubKey []byte) bool {
-	digest := Sha256Digest(signMsg.Msg)
-	result := RsaVerifyWithSha256(digest, signMsg.Sign, pubKey)
-	return result
+func (lc *LogCert) pushPrepare(args *PrepareArgs) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.prepareQ = append(lc.prepareQ, args)
 }
 
-func SignMsg(msg *Message, priKey []byte) *SignMessage {
-	digest := Sha256Digest(msg)
-	sign := RsaSignWithSha256(digest, priKey)
-	return &SignMessage{msg, sign, -1}
+func (lc *LogCert) pushCommit(args *CommitArgs) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.commitQ = append(lc.commitQ, args)
 }
 
-// func SignMsg(msg *Message, priKey []byte) *Message {
-// 	if msg.Txs == nil {
-// 		return msg
-// 	}
-// 	digestTime, signTime := time.Duration(0), time.Duration(0)
-// 	msg.TxSigns = make([][]byte, 0)
-// 	for _, tx := range msg.Txs {
-// 		start := time.Now()
-// 		digest := Sha256Digest(tx)
-// 		digestTime += time.Since(start)
-// 		start = time.Now()
-// 		sign := RsaSignWithSha256(digest, priKey)
-// 		signTime += time.Since(start)
-// 		msg.TxSigns = append(msg.TxSigns, sign)
-// 	}
-// 	Info("digestTime: %v", digestTime)
-// 	Info("signTime: %v", signTime)
-// 	return msg
-// }
+func (lc *LogCert) popAllPrepares() []*PrepareArgs {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	argsQ := lc.prepareQ
+	lc.prepareQ = nil
+	return argsQ
+}
 
-// func VerifyPrePrepareSignMsg(signMsg *SignMessage, pubKey []byte) bool {
-// 	txs := signMsg.Msg.Req.Txs
-// 	signs := signMsg.Msg.Req.TxSigns
-// 	if txs == nil || signs == nil || len(txs) != len(signs) {
-// 		return false
-// 	}
-// 	digestTime, verifyTime := time.Duration(0), time.Duration(0)
-// 	for idx, tx := range txs {
-// 		sign := signs[idx]
-// 		start := time.Now()
-// 		digest := Sha256Digest(tx)
-// 		digestTime += time.Since(start)
-// 		start = time.Now()
-// 		if !RsaVerifyWithSha256(digest, sign, pubKey) {
-// 			return false
-// 		}
-// 		verifyTime += time.Since(start)
-// 	}
-// 	Info("digestTime:", digestTime)
-// 	Info("verifyTime:", verifyTime)
-// 	return true
-// }
+func (lc *LogCert) popAllCommits() []*CommitArgs {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	argsQ := lc.commitQ
+	lc.commitQ = nil
+	return argsQ
+}
 
-//func SignPrePrepareMsg(msg *Message, priKey []byte) *SignMessage {
-//	signMsg := &SignMessage{Msg: msg}
-//	if signMsg.Msg.Req.Txs == nil {
-//		return signMsg
-//	}
-//	digestTime, signTime := time.Duration(0), time.Duration(0)
-//	signMsg.TxSigns = make([][]byte, 0)
-//	for _, tx := range msg.Req.Txs {
-//		start := time.Now()
-//		digest := Sha256Digest(tx)
-//		digestTime += time.Since(start)
-//		start = time.Now()
-//		sign := RsaSignWithSha256(digest, priKey)
-//		signTime += time.Since(start)
-//		signMsg.TxSigns = append(signMsg.TxSigns, sign)
-//	}
-//	Info("digestTime:", digestTime)
-//	Info("signTime:", signTime)
-//	return signMsg
-//}
+func (lc *LogCert) getStage() Stage {
+	return atomic.LoadInt32(&lc.stage)
+}
+
+func (lc *LogCert) setStage(stage Stage) {
+	atomic.StoreInt32(&lc.stage, stage)
+}
+
+func (lc *LogCert) prepareVoted(nodeId int64) bool {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	_, ok := lc.prepares[nodeId]
+	return ok
+}
+
+func (lc *LogCert) commitVoted(nodeId int64) bool {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	_, ok := lc.commits[nodeId]
+	return ok
+}
+
+func (lc *LogCert) prepareVote(args *PrepareArgs) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.prepares[args.Msg.NodeId] = args
+}
+
+func (lc *LogCert) commitVote(args *CommitArgs) {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	lc.commits[args.Msg.NodeId] = args
+}
+
+func (lc *LogCert) prepareBallot() int {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return len(lc.prepares)
+}
+
+func (lc *LogCert) commitBallot() int {
+	lc.mu.Lock()
+	defer lc.mu.Unlock()
+	return len(lc.commits)
+}
+
+type RequestMsg struct {
+	Operator  []byte
+	Timestamp int64
+	ClientId  int64
+}
+
+type PrePrepareMsg struct {
+	View   int64
+	Seq    int64
+	Digest []byte
+	NodeId int64
+}
+
+type PrepareMsg struct {
+	View   int64
+	Seq    int64
+	Digest []byte
+	NodeId int64
+}
+
+type CommitMsg struct {
+	View   int64
+	Seq    int64
+	Digest []byte
+	NodeId int64
+}
+
+type ReplyMsg struct {
+	View      int64
+	Seq       int64
+	Timestamp int64
+	ClientId  int64
+	NodeId    int64
+	Result    []byte
+}
+
+type RequestArgs struct {
+	Req  *RequestMsg
+	Sign []byte
+}
+
+type RequestReply struct {
+	Seq int64
+	Ok  bool
+}
+
+type PrePrepareArgs struct {
+	Msg     *PrePrepareMsg
+	Sign    []byte
+	ReqArgs *RequestArgs
+}
+
+type PrepareArgs struct {
+	Msg  *PrepareMsg
+	Sign []byte
+}
+
+type CommitArgs struct {
+	Msg  *CommitMsg
+	Sign []byte
+}
+
+type ReplyArgs struct {
+	Msg  *ReplyMsg
+	Sign []byte
+}
