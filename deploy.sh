@@ -6,10 +6,10 @@ servers=(
     "219.228.148.80"
     "219.228.148.89"
     "219.228.148.129"
-    # "219.228.148.169"
-    # "219.228.148.181"
-    # "219.228.148.222"
-    # "219.228.148.231"
+    "219.228.148.178"
+    "219.228.148.181"
+    "219.228.148.222"
+    "219.228.148.231"
 )
 
 function deployClient() {
@@ -21,6 +21,7 @@ function deployClient() {
     sshpass -p z scp rpbft/rpbft z@${client}:~/zpbft/rpbft
     # sshpass -p z scp -r certs z@${client}:~/zpbft/certs
     echo ${client} >config/local_ip.txt
+    sshpass -p z scp -r config/local_ip.txt z@${client}:~/zpbft/config/local_ip.txt
     sshpass -p z scp -r config/config.json z@${client}:~/zpbft/config/config.json
     end=$(date +%s)
     take=$((end - start))
@@ -35,8 +36,12 @@ function deployServer() {
         start=$(date +%s)
         sshpass -p z scp bin/zpbft z@${srv}:~/zpbft/zpbft
         sshpass -p z scp rpbft/rpbft z@${srv}:~/zpbft/rpbft
+
+        # sshpass -p z scp -r config z@${srv}:~/zpbft/config
         # sshpass -p z scp -r certs z@${srv}:~/zpbft/certs
+
         echo ${srv} >config/local_ip.txt
+        sshpass -p z scp -r config/local_ip.txt z@${srv}:~/zpbft/config/local_ip.txt
         sshpass -p z scp -r config/config.json z@${srv}:~/zpbft/config/config.json
         end=$(date +%s)
         take=$((end - start))
