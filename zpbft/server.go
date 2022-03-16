@@ -341,7 +341,7 @@ func (s *Server) connect(coch chan<- interface{}) {
 			if s.id2srvCli[id] == nil {
 				cli, err := rpc.DialHTTP("tcp", node.addr)
 				if err != nil {
-					Info("connect %d error: %v", node.addr, err)
+					Warn("connect %s error: %v", node.addr, err)
 					ok = false
 				} else {
 					s.id2srvCli[id] = cli
@@ -352,7 +352,7 @@ func (s *Server) connect(coch chan<- interface{}) {
 		if s.cliCli == nil {
 			cli, err := rpc.DialHTTP("tcp", KConfig.ClientNode.addr)
 			if err != nil {
-				Info("connect %d error: %v", KConfig.ClientNode.addr, err)
+				Warn("connect %d error: %v", KConfig.ClientNode.addr, err)
 				ok = false
 			} else {
 				s.cliCli = cli

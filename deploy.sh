@@ -17,12 +17,14 @@ function deployClient() {
 
     printf "deploy client in %-16s ..." ${client}
     start=$(date +%s)
-    sshpass -p z scp bin/zpbft z@${client}:~/zpbft/zpbft
-    sshpass -p z scp rpbft/rpbft z@${client}:~/zpbft/rpbft
-    # sshpass -p z scp -r certs z@${client}:~/zpbft/certs
+
     echo ${client} >config/local_ip.txt
-    sshpass -p z scp -r config/local_ip.txt z@${client}:~/zpbft/config/local_ip.txt
+    sshpass -p z scp -r config z@${client}:~/zpbft/config
+    sshpass -p z scp bin/zpbft z@${client}:~/zpbft/zpbft
+    # sshpass -p z scp -r certs z@${client}:~/zpbft/certs
+
     sshpass -p z scp -r config/config.json z@${client}:~/zpbft/config/config.json
+
     end=$(date +%s)
     take=$((end - start))
     printf "\rdeploy client in %-16s ok, take %ds\n" ${client} ${take}
@@ -34,15 +36,14 @@ function deployServer() {
     for srv in ${servers[@]}; do
         printf "deploy server in %-16s ..." ${srv}
         start=$(date +%s)
-        sshpass -p z scp bin/zpbft z@${srv}:~/zpbft/zpbft
-        sshpass -p z scp rpbft/rpbft z@${srv}:~/zpbft/rpbft
-
-        # sshpass -p z scp -r config z@${srv}:~/zpbft/config
-        # sshpass -p z scp -r certs z@${srv}:~/zpbft/certs
 
         echo ${srv} >config/local_ip.txt
-        sshpass -p z scp -r config/local_ip.txt z@${srv}:~/zpbft/config/local_ip.txt
+        # sshpass -p z scp -r config z@${srv}:~/zpbft/config
+        sshpass -p z scp bin/zpbft z@${srv}:~/zpbft/zpbft
+        # sshpass -p z scp -r certs z@${srv}:~/zpbft/certs
+
         sshpass -p z scp -r config/config.json z@${srv}:~/zpbft/config/config.json
+
         end=$(date +%s)
         take=$((end - start))
         printf "\rdeploy server in %-16s ok, take %ds\n" ${srv} ${take}
@@ -56,12 +57,11 @@ if (($# == 0)); then
 fi
 
 printf "\n[compile]\n"
-printf "compile zpbft, rpbft ..."
+printf "compile zpbft ..."
 start=$(date +%s)
-go build -race -o bin/zpbft main/main.go
-cd rpbft
-go build -race .
-cd ..
+
+./build.sh
+
 end=$(date +%s)
 take=$((end - start))
 printf "\rcompile zpbft, rpbft ok, take %ds\n" ${take}

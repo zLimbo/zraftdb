@@ -17,6 +17,7 @@ type Client struct {
 	sumLatency int64
 	mu         sync.Mutex
 	coch       chan interface{}
+	num        int
 }
 
 func (c *Client) getCertOrNew(seq int64) *CmdCert {
@@ -92,12 +93,11 @@ func (c *Client) connect(coch chan<- interface{}) {
 			if c.id2srvCli[id] == nil {
 				cli, err := rpc.DialHTTP("tcp", node.addr)
 				if err != nil {
-					Info("connect %d error: %v", node.addr, err)
+					Warn("connect %d error: %v", node.addr, err)
 					ok = false
 				} else {
 					c.id2srvCli[id] = cli
 				}
-
 			}
 		}
 	}
@@ -125,7 +125,9 @@ func (c *Client) sendReq(coch <-chan interface{}) {
 	peerNum := len(KConfig.PeerIds)
 	c.start = time.Now()
 	cnt := 0
-	for i := 0; i < KConfig.BoostNum; i++ {
+
+	Info("clientNum: %d, reqNum: %d", c.num, KConfig.ReqNum)
+	for i := 0; i < c.num; i++ {
 		go func() {
 			for i := 0; i < KConfig.ReqNum; i++ {
 				randId := KConfig.PeerIds[rand.Intn(peerNum)]
@@ -157,12 +159,13 @@ func (c *Client) sendReq(coch <-chan interface{}) {
 	}
 }
 
-func RunClient() {
+func RunClient(clientNum int) {
 	client := &Client{
 		node:      KConfig.ClientNode,
 		id2srvCli: make(map[int64]*rpc.Client),
 		seq2cert:  make(map[int64]*CmdCert),
 		coch:      make(chan interface{}, 100),
+		num:       clientNum,
 	}
 	coch := make(chan interface{})
 	go client.connect(coch)

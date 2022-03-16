@@ -24,12 +24,11 @@ func main() {
 	flag.IntVar(&processNum, "n", 8, "每个ip运行进程数")
 
 	ips := ReadIps(inPath)
-	fmt.Println("ips:", ips)
+	Info("ips: \n%v", ips)
 
 	ipNum := len(ips)
 
 	GenRsaKeys(ips, ipNum, processNum, outPath)
-	fmt.Println("gen certs ok")
 }
 
 func GenRsaKeys(ips []string, ipNum int, processNum int, outPath string) {
@@ -38,11 +37,13 @@ func GenRsaKeys(ips []string, ipNum int, processNum int, outPath string) {
 		Info("rm %s", outPath)
 		os.RemoveAll(outPath)
 	}
-	Info("gen ...")
+
 	err := os.Mkdir(outPath, 0744)
 	if err != nil {
 		Error("os.Mkdir(\"certs\", 0744), err: %v", err)
 	}
+	Info("mkdir %s", outPath)
+	Info("gen ...")
 	for _, ip := range ips[:ipNum] {
 		for i := 1; i <= processNum; i++ {
 			id := GetId(ip, i)
@@ -141,6 +142,7 @@ func GetId(ip string, port int) int64 {
 
 func ReadIps(path string) []string {
 
+	Info("read %s", path)
 	data, err := ioutil.ReadFile(path)
 	if err != nil {
 		Error("err: %v", err)

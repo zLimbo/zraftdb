@@ -11,8 +11,14 @@ func main() {
 	if IsClient() { // 启动客户端
 
 		Info("start client...")
-		runtime.GOMAXPROCS(runtime.NumCPU())
-		RunClient()
+
+		var clientNum int
+		flag.IntVar(&clientNum, "clientNum", 1, "客户端并发数目")
+		flag.Parse()
+		Info("clientNum: %d", clientNum)
+		runtime.GOMAXPROCS(clientNum)
+
+		RunClient(clientNum)
 
 	} else {
 		var processIdx int
