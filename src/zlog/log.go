@@ -18,8 +18,9 @@ func init() {
 	log.SetFlags(log.Lshortfile)
 }
 
-// var ZLogLevel LogLevel = DebugLevel
-var ZLogLevel LogLevel = InfoLevel
+var ZLogLevel LogLevel = DebugLevel
+
+// var ZLogLevel LogLevel = InfoLevel
 
 func Debug(format string, v ...interface{}) {
 	if ZLogLevel > DebugLevel {

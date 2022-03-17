@@ -93,7 +93,7 @@ type Raft struct {
 	applyCh  chan ApplyMsg
 
 	currentTerm     int
-	votedFor        int
+	voteFor         int
 	logs            []LogEntry
 	electionTimeout int32 // leader 是否超时
 
@@ -144,7 +144,7 @@ func (rf *Raft) persist() {
 	defer rf.mu.Unlock()
 
 	e.Encode(rf.currentTerm)
-	e.Encode(rf.votedFor)
+	e.Encode(rf.voteFor)
 	e.Encode(rf.logs)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
@@ -185,7 +185,7 @@ func (rf *Raft) readPersist(data []byte) {
 		defer rf.mu.Unlock()
 
 		rf.currentTerm = currentTerm
-		rf.votedFor = votedFor
+		rf.voteFor = votedFor
 		rf.logs = logs
 	}
 }
@@ -243,12 +243,20 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 
 	reply.Term = rf.currentTerm
-	if rf.currentTerm < args.Term &&
-		(rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
+	if rf.currentTerm <= args.Term &&
+		(rf.voteFor == -1 || rf.voteFor == args.CandidateId) &&
 		rf.commitIndex <= args.LastLogIndex {
-		rf.votedFor = args.CandidateId // 投票
-		reply.VoteGranted = true
 		zlog.Debug("%d | %d | %2d | vote for %d", rf.me, rf.currentTerm, rf.leaderId, args.CandidateId)
+		reply.VoteGranted = true
+		rf.voteFor = args.CandidateId
+		// 定时重置投票权
+		go func() {
+			elapsedTime := rand.Intn(150) + 150
+			time.Sleep(time.Duration(elapsedTime) * time.Millisecond)
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+			rf.voteFor = -1
+		}()
 	} else {
 		reply.VoteGranted = false
 		zlog.Debug("%d | %d | %2d | reject vote for %d", rf.me, rf.currentTerm, rf.leaderId, args.CandidateId)
@@ -326,7 +334,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.leaderId = args.LeaderId
 		rf.state = Follower
 		rf.currentTerm = args.Term // 新的Term应该更高
-		rf.votedFor = -1
+		rf.voteFor = -1
 	}
 
 	// 重置超时flag
@@ -452,7 +460,7 @@ func (rf *Raft) heartbeat() {
 		reply := &AppendEntriesReply{}
 		server1 := server
 		go func() {
-			zlog.Debug("%d | %d | %2d | hearbeat %d", rf.me, rf.currentTerm, rf.leaderId, server1)
+			zlog.Debug("%d | %d | %2d | heartbeat %d", rf.me, rf.currentTerm, rf.leaderId, server1)
 			ok := rf.sendAppendEntries(server1, args, reply)
 			if !ok {
 				// 10ms 后重发一次
@@ -477,19 +485,20 @@ func (rf *Raft) heartbeat() {
 func (rf *Raft) elect() {
 	zlog.Debug("%d | %d | %2d | state: %s => candidate, elect",
 		rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state])
+
 	args := func() *RequestVoteArgs {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 
 		// 如果已投票，则不进行选举
-		if rf.votedFor != -1 {
+		if rf.voteFor != -1 {
 			return nil
 		}
 
 		rf.currentTerm += 1  // 自增自己的当前term
 		rf.state = Candidate // 身份先变为candidate
 		rf.leaderId = -1     // 无主状态
-		rf.votedFor = rf.me  // 竞选获得票数，自己会先给自己投一票，若其他人请求投票会失败
+		rf.voteFor = rf.me   // 竞选获得票数，自己会先给自己投一票，若其他人请求投票会失败
 
 		return &RequestVoteArgs{
 			Term:         rf.currentTerm,
@@ -519,7 +528,7 @@ func (rf *Raft) elect() {
 				rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state])
 			// 变回follower，重置投票参数
 			rf.state = Follower
-			rf.votedFor = -1
+			rf.voteFor = -1
 		}
 	}()
 
@@ -548,7 +557,7 @@ func (rf *Raft) elect() {
 						rf.state = Follower
 						rf.currentTerm = reply.Term
 						rf.leaderId = -1
-						rf.votedFor = -1
+						rf.voteFor = -1
 						return
 					}
 				}()
@@ -570,11 +579,7 @@ func (rf *Raft) elect() {
 					rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state])
 				rf.state = Leader
 				rf.leaderId = rf.me
-				rf.votedFor = -1
-				nap := LogEntry{
-					Term: rf.currentTerm,
-				}
-				rf.logs = append(rf.logs, nap)
+				rf.voteFor = -1
 				// 立刻发送心跳包通知其他节点,这里必须另开协程，否则会死锁
 				go rf.heartbeat()
 			}
@@ -610,13 +615,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		leaderId:    -1,
 		applyCh:     applyCh,
 		currentTerm: 0,
-		votedFor:    -1,
+		voteFor:     -1,
 		logs:        make([]LogEntry, 0),
 		commitIndex: 0,
 		lastApplied: 0,
 		nextIndex:   make([]int, len(peers)),
 		matchIndex:  make([]int, len(peers)),
 	}
+
+	nap := LogEntry{
+		Term: rf.currentTerm,
+	}
+	rf.logs = append(rf.logs, nap)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
