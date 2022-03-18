@@ -74,6 +74,16 @@ var state2str = map[State]string{
 	Leader:    "leader",
 }
 
+const (
+	heartbeatTime        = 100
+	electionTimeoutFrom  = 600
+	electionTimeoutRange = 200
+)
+
+func GetRandomElapsedTime() int {
+	return rand.Intn(electionTimeoutFrom) + electionTimeoutRange
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -92,10 +102,10 @@ type Raft struct {
 	leaderId int
 	applyCh  chan ApplyMsg
 
-	currentTerm     int
-	voteFor         int
-	logs            []LogEntry
-	electionTimeout int32 // leader 是否超时
+	currentTerm int
+	votedFor    int
+	logs        []LogEntry
+	leaderLost  int32 // leader 是否超时
 
 	commitIndex int
 	lastApplied int
@@ -144,7 +154,7 @@ func (rf *Raft) persist() {
 	defer rf.mu.Unlock()
 
 	e.Encode(rf.currentTerm)
-	e.Encode(rf.voteFor)
+	e.Encode(rf.votedFor)
 	e.Encode(rf.logs)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
@@ -185,7 +195,7 @@ func (rf *Raft) readPersist(data []byte) {
 		defer rf.mu.Unlock()
 
 		rf.currentTerm = currentTerm
-		rf.voteFor = votedFor
+		rf.votedFor = votedFor
 		rf.logs = logs
 	}
 }
@@ -244,18 +254,18 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	reply.Term = rf.currentTerm
 	if rf.currentTerm <= args.Term &&
-		(rf.voteFor == -1 || rf.voteFor == args.CandidateId) &&
+		(rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
 		rf.commitIndex <= args.LastLogIndex {
 		zlog.Debug("%d | %d | %2d | vote for %d", rf.me, rf.currentTerm, rf.leaderId, args.CandidateId)
 		reply.VoteGranted = true
-		rf.voteFor = args.CandidateId
+		rf.votedFor = args.CandidateId
 		// 定时重置投票权
 		go func() {
 			elapsedTime := rand.Intn(150) + 150
 			time.Sleep(time.Duration(elapsedTime) * time.Millisecond)
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
-			rf.voteFor = -1
+			rf.votedFor = -1
 		}()
 	} else {
 		reply.VoteGranted = false
@@ -334,11 +344,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.leaderId = args.LeaderId
 		rf.state = Follower
 		rf.currentTerm = args.Term // 新的Term应该更高
-		rf.voteFor = -1
+		rf.votedFor = -1
 	}
 
 	// 重置超时flag
-	rf.electionTimeout = 0
+	rf.leaderLost = 0
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -409,35 +419,36 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 
-		// 如果本节点是leader，则发送心跳包，每20ms发送一次
+		// 如果本节点是leader，则发送心跳包，每 heartbeatTime 发送一次
 		if atomic.LoadInt32(&rf.state) == Leader {
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(heartbeatTime * time.Millisecond)
 			rf.heartbeat()
 			continue
 		}
 
 		if atomic.LoadInt32(&rf.state) == Candidate {
 			// candidate 随时可能成为leader，要及时进行heartbeat, 所以不能长时间睡眠
-			time.Sleep(20 * time.Millisecond)
+			time.Sleep(heartbeatTime * time.Millisecond)
 			continue
 		}
 
 		// 如果是follower，则检测leader是否失效，重新进行选举
 		// 先将失效设置为1，leader的心跳包会将该值在检测期间重新置为 0
-		atomic.StoreInt32(&rf.electionTimeout, 1)
+		atomic.StoreInt32(&rf.leaderLost, 1)
 
-		// 失效时间在[150ms,300ms)间随机
-		elapsedTime := rand.Intn(150) + 150
+		// 失效时间在[electionTimeout, 2 * electionTimeout)间随机
+		elapsedTime := GetRandomElapsedTime()
 		zlog.Debug("%d | %d | %2d | elapsedTime: %d (ms)", rf.me, rf.currentTerm, rf.leaderId, elapsedTime)
 		time.Sleep(time.Duration(elapsedTime) * time.Millisecond)
 
 		// 如果失效则参加选举
-		if atomic.LoadInt32(&rf.electionTimeout) == 1 {
+		if atomic.LoadInt32(&rf.leaderLost) == 1 {
 			rf.elect()
 		}
 	}
 }
 
+// 发送心跳
 func (rf *Raft) heartbeat() {
 
 	args := func() *AppendEntriesArgs {
@@ -482,6 +493,7 @@ func (rf *Raft) heartbeat() {
 	}
 }
 
+// 选举
 func (rf *Raft) elect() {
 	zlog.Debug("%d | %d | %2d | state: %s => candidate, elect",
 		rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state])
@@ -491,14 +503,14 @@ func (rf *Raft) elect() {
 		defer rf.mu.Unlock()
 
 		// 如果已投票，则不进行选举
-		if rf.voteFor != -1 {
+		if rf.votedFor != -1 {
 			return nil
 		}
 
 		rf.currentTerm += 1  // 自增自己的当前term
 		rf.state = Candidate // 身份先变为candidate
 		rf.leaderId = -1     // 无主状态
-		rf.voteFor = rf.me   // 竞选获得票数，自己会先给自己投一票，若其他人请求投票会失败
+		rf.votedFor = rf.me  // 竞选获得票数，自己会先给自己投一票，若其他人请求投票会失败
 
 		return &RequestVoteArgs{
 			Term:         rf.currentTerm,
@@ -516,10 +528,10 @@ func (rf *Raft) elect() {
 	// 选举票号统计，1为自己给自己投的票
 	var ballot int32 = 1
 
-	// 候选人状态超时，则退回 follower 身份
+	// 异步发现候选人状态超时，则退回 follower 身份
 	go func() {
 		// 候选人状态失效时间
-		elapsedTime := rand.Intn(150) + 150
+		elapsedTime := GetRandomElapsedTime()
 		time.Sleep(time.Duration(elapsedTime) * time.Millisecond)
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
@@ -528,7 +540,7 @@ func (rf *Raft) elect() {
 				rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state])
 			// 变回follower，重置投票参数
 			rf.state = Follower
-			rf.voteFor = -1
+			rf.votedFor = -1
 		}
 	}()
 
@@ -541,6 +553,7 @@ func (rf *Raft) elect() {
 		// 并发请求投票，成为leader的逻辑也在此处理
 		server1 := server
 		go func() {
+			// TODO 是否需要判断下已经成为leader而不用发送请求投票信息？
 			zlog.Debug("%d | %d | %2d | request vote %d", rf.me, rf.currentTerm, rf.leaderId, server1)
 			reply := &RequestVoteReply{}
 			if ok := rf.sendRequestVote(server1, args, reply); !ok {
@@ -557,7 +570,7 @@ func (rf *Raft) elect() {
 						rf.state = Follower
 						rf.currentTerm = reply.Term
 						rf.leaderId = -1
-						rf.voteFor = -1
+						rf.votedFor = -1
 						return
 					}
 				}()
@@ -579,7 +592,7 @@ func (rf *Raft) elect() {
 					rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state])
 				rf.state = Leader
 				rf.leaderId = rf.me
-				rf.voteFor = -1
+				rf.votedFor = -1
 				// 立刻发送心跳包通知其他节点,这里必须另开协程，否则会死锁
 				go rf.heartbeat()
 			}
@@ -615,7 +628,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		leaderId:    -1,
 		applyCh:     applyCh,
 		currentTerm: 0,
-		voteFor:     -1,
+		votedFor:    -1,
 		logs:        make([]LogEntry, 0),
 		commitIndex: 0,
 		lastApplied: 0,
