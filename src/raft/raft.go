@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"log"
 	"math/rand"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,6 +69,7 @@ const (
 	Leader
 )
 
+//
 var state2str = map[State]string{
 	Follower:  "follower",
 	Candidate: "candidate",
@@ -75,7 +77,8 @@ var state2str = map[State]string{
 }
 
 const (
-	heartbeatTime        = 100
+	intervalTime         = 10
+	heartbeatTime        = 80
 	electionTimeoutFrom  = 600
 	electionTimeoutRange = 200
 )
@@ -104,7 +107,7 @@ type Raft struct {
 
 	currentTerm int
 	votedFor    int
-	logs        []LogEntry
+	log         []LogEntry
 	leaderLost  int32 // leader 是否超时
 
 	commitIndex int
@@ -124,6 +127,7 @@ func (rf *Raft) GetState() (int, bool) {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+
 	term = rf.currentTerm
 	if rf.state == Leader {
 		isleader = true
@@ -155,7 +159,7 @@ func (rf *Raft) persist() {
 
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
-	e.Encode(rf.logs)
+	e.Encode(rf.log)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 }
@@ -184,19 +188,17 @@ func (rf *Raft) readPersist(data []byte) {
 	d := labgob.NewDecoder(r)
 	var currentTerm int
 	var votedFor int
-	var logs []LogEntry
+	var log1 []LogEntry
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
-		d.Decode(&logs) != nil {
+		d.Decode(&log1) != nil {
 		log.Panicln("read persist error.")
 	} else {
-
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
-
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
-		rf.logs = logs
+		rf.log = log1
 	}
 }
 
@@ -329,26 +331,48 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	defer rf.mu.Unlock()
 
 	reply.Term = rf.currentTerm
+	reply.Success = false
+
 	if args.Term < rf.currentTerm {
-		reply.Success = false
 		return
 	}
-	reply.Success = true
-
-	// TODO 暂时先处理心跳包
 
 	// 新的leader产生
 	if args.LeaderId != rf.leaderId {
 		zlog.Debug("%d | %d | %2d | state: %s => follower, new leader %d",
 			rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state], args.LeaderId)
 		rf.leaderId = args.LeaderId
-		rf.state = Follower
-		rf.currentTerm = args.Term // 新的Term应该更高
 		rf.votedFor = -1
 	}
 
-	// 重置超时flag
-	rf.leaderLost = 0
+	rf.state = Follower        // 无论原来状态是什么，状态更新为follower
+	rf.leaderLost = 0          // 重置超时flag
+	rf.currentTerm = args.Term // 新的Term应该更高
+
+	if len(rf.log) <= args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		return
+	}
+
+	// 截断后面的日志
+	if len(rf.log) > args.PrevLogIndex+1 {
+		rf.log = rf.log[:args.PrevLogIndex]
+	}
+
+	// 添加日志
+	rf.log = append(rf.log, args.Entries...)
+
+	// 推进commit和apply
+	oldCommitIndex := rf.commitIndex
+	rf.commitIndex = MinInt(args.LeaderCommit, len(rf.log)-1)
+	for i := oldCommitIndex + 1; i <= rf.commitIndex; i++ {
+		rf.applyCh <- ApplyMsg{
+			CommandValid: true,
+			Command:      rf.log[i].Command,
+			CommandIndex: i,
+		}
+	}
+
+	reply.Success = true
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -380,10 +404,14 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	index = rf.commitIndex
 	term = rf.currentTerm
 	if rf.state == Leader {
 		isLeader = true
+		rf.log = append(rf.log, LogEntry{
+			Term:    rf.currentTerm,
+			Command: command,
+		})
+		index = len(rf.log) - 1
 	}
 
 	return index, term, isLeader
@@ -403,6 +431,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
+
+	zlog.Debug("%d | %d | %2d | killed", rf.me, rf.currentTerm, rf.leaderId)
 }
 
 func (rf *Raft) killed() bool {
@@ -413,21 +443,16 @@ func (rf *Raft) killed() bool {
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
+	for !rf.killed() {
 
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 
 		// 如果本节点是leader，则发送心跳包，每 heartbeatTime 发送一次
-		if atomic.LoadInt32(&rf.state) == Leader {
-			time.Sleep(heartbeatTime * time.Millisecond)
-			rf.heartbeat()
-			continue
-		}
+		// candidate 随时可能成为leader，要及时进行heartbeat, 所以不能长时间睡眠
+		if atomic.LoadInt32(&rf.state) != Follower {
 
-		if atomic.LoadInt32(&rf.state) == Candidate {
-			// candidate 随时可能成为leader，要及时进行heartbeat, 所以不能长时间睡眠
 			time.Sleep(heartbeatTime * time.Millisecond)
 			continue
 		}
@@ -438,58 +463,13 @@ func (rf *Raft) ticker() {
 
 		// 失效时间在[electionTimeout, 2 * electionTimeout)间随机
 		elapsedTime := GetRandomElapsedTime()
-		zlog.Debug("%d | %d | %2d | elapsedTime: %d (ms)", rf.me, rf.currentTerm, rf.leaderId, elapsedTime)
 		time.Sleep(time.Duration(elapsedTime) * time.Millisecond)
 
 		// 如果失效则参加选举
 		if atomic.LoadInt32(&rf.leaderLost) == 1 {
+			zlog.Debug("%d | %d | %2d | elapsedTime: %d (ms)", rf.me, rf.currentTerm, rf.leaderId, elapsedTime)
 			rf.elect()
 		}
-	}
-}
-
-// 发送心跳
-func (rf *Raft) heartbeat() {
-
-	args := func() *AppendEntriesArgs {
-		rf.mu.Lock()
-		defer rf.mu.Unlock()
-		return &AppendEntriesArgs{
-			Term:         rf.currentTerm,
-			LeaderId:     rf.me,
-			PrevLogIndex: len(rf.logs) - 1,
-			PrevLogTerm:  rf.logs[len(rf.logs)-1].Term,
-			Entries:      []LogEntry{},
-			LeaderCommit: rf.commitIndex,
-		}
-	}()
-
-	for server := range rf.peers {
-		if server == rf.me {
-			continue
-		}
-		reply := &AppendEntriesReply{}
-		server1 := server
-		go func() {
-			zlog.Debug("%d | %d | %2d | heartbeat %d", rf.me, rf.currentTerm, rf.leaderId, server1)
-			ok := rf.sendAppendEntries(server1, args, reply)
-			if !ok {
-				// 10ms 后重发一次
-				time.Sleep(10 * time.Millisecond)
-				ok = rf.sendAppendEntries(server1, args, reply)
-			}
-			if ok {
-				rf.mu.Lock()
-				defer rf.mu.Unlock()
-				if rf.currentTerm < reply.Term {
-					zlog.Debug("%d | %d | %2d | state: %s => follower, higher term from %d",
-						rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state], server1)
-					rf.currentTerm = reply.Term
-					rf.state = Follower
-					rf.leaderId = -1
-				}
-			}
-		}()
 	}
 }
 
@@ -515,8 +495,8 @@ func (rf *Raft) elect() {
 		return &RequestVoteArgs{
 			Term:         rf.currentTerm,
 			CandidateId:  rf.me,
-			LastLogIndex: 0,
-			LastLogTerm:  0,
+			LastLogIndex: len(rf.log) - 1,
+			LastLogTerm:  rf.log[len(rf.log)-1].Term,
 		}
 	}()
 
@@ -593,10 +573,100 @@ func (rf *Raft) elect() {
 				rf.state = Leader
 				rf.leaderId = rf.me
 				rf.votedFor = -1
-				// 立刻发送心跳包通知其他节点,这里必须另开协程，否则会死锁
-				go rf.heartbeat()
+				for i := range rf.nextIndex {
+					rf.nextIndex[i] = len(rf.log)
+					rf.matchIndex[i] = 0
+				}
+				rf.heartbeat()
 			}
 		}()
+	}
+}
+
+// 发送心跳
+func (rf *Raft) heartbeat() {
+
+	for server := range rf.peers {
+		if server == rf.me {
+			continue
+		}
+		go rf.timingSend(server)
+	}
+}
+
+func (rf *Raft) timingSend(server int) {
+
+	for !rf.killed() && atomic.LoadInt32(&rf.state) == Leader {
+		args := func() *AppendEntriesArgs {
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+			nextIndex := rf.nextIndex[server]
+			return &AppendEntriesArgs{
+				Term:         rf.currentTerm,
+				LeaderId:     rf.me,
+				PrevLogIndex: nextIndex - 1,
+				PrevLogTerm:  rf.log[nextIndex-1].Term,
+				Entries:      rf.log[nextIndex:],
+				LeaderCommit: rf.commitIndex,
+			}
+		}()
+		reply := &AppendEntriesReply{}
+		zlog.Debug("%d | %d | %2d | heartbeat %d, PrevLogIndex %d, PrevLogTerm %d",
+			rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogIndex, args.PrevLogTerm)
+		ok := rf.sendAppendEntries(server, args, reply)
+		if ok {
+			func() {
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				if rf.currentTerm < reply.Term {
+					zlog.Debug("%d | %d | %2d | state: %s => follower, higher term from %d, exit heartbeat",
+						rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state], server)
+					rf.currentTerm = reply.Term
+					rf.state = Follower
+					rf.leaderId = -1
+					return
+				}
+				// 如果不成功，说明PrevLogIndex不匹配，递减nextIndex
+				if !reply.Success {
+					rf.nextIndex[server]--
+					return
+				}
+				// 复制到副本成功
+				rf.nextIndex[server] = args.PrevLogIndex + len(args.Entries) + 1
+				rf.matchIndex[server] = args.PrevLogIndex + len(args.Entries)
+				// 判断是否需要递增 commitIndex
+				indexs := make([]int, len(rf.matchIndex))
+				copy(indexs, rf.matchIndex)
+				sort.Ints(indexs)
+				newIndex := indexs[(len(indexs)-1)/2]
+				// 相同任期才允许同步
+				if rf.log[newIndex].Term == rf.currentTerm {
+					rf.commitIndex = newIndex
+				}
+			}()
+		}
+
+		// time.Sleep(heartbeatTime * time.Millisecond)
+		// continue
+
+		// 每隔 intervalTime 检查是否有新的日志需要同步，有则立即发送，否则等到 heartbeatTime 时间发送心跳包
+		// 包括了前面发错重发和nextIndex--的情况
+		for sumTime := intervalTime; sumTime < heartbeatTime; sumTime += intervalTime {
+			// 检查是否已不是leader或被kill
+			if rf.killed() || atomic.LoadInt32(&rf.state) != Leader {
+				return
+			}
+			needSoon := func() bool {
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				// 有新的日志需要同步
+				return len(rf.log)-1 >= rf.nextIndex[server]
+			}()
+			if needSoon {
+				break
+			}
+			time.Sleep(intervalTime * time.Millisecond)
+		}
 	}
 }
 
@@ -629,17 +699,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		applyCh:     applyCh,
 		currentTerm: 0,
 		votedFor:    -1,
-		logs:        make([]LogEntry, 0),
+		log:         []LogEntry{{Term: 0}}, // 初始存一个默认entry，索引和任期为0
 		commitIndex: 0,
 		lastApplied: 0,
 		nextIndex:   make([]int, len(peers)),
 		matchIndex:  make([]int, len(peers)),
 	}
-
-	nap := LogEntry{
-		Term: rf.currentTerm,
-	}
-	rf.logs = append(rf.logs, nap)
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -648,4 +713,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.ticker()
 
 	return rf
+}
+
+func MinInt(x, y int) int {
+	if x < y {
+		return x
+	}
+	return y
 }
