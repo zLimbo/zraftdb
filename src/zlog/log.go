@@ -14,13 +14,12 @@ const (
 	ErrorLevel
 )
 
+var ZLogLevel LogLevel = InfoLevel
+
 func init() {
 	log.SetFlags(log.Lshortfile)
+	// ZLogLevel = DebugLevel
 }
-
-// var ZLogLevel LogLevel = DebugLevel
-
-var ZLogLevel LogLevel = InfoLevel
 
 func Debug(format string, v ...interface{}) {
 	if ZLogLevel > DebugLevel {

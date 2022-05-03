@@ -349,6 +349,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.state = Follower        // 无论原来状态是什么，状态更新为follower
 	rf.leaderLost = 0          // 重置超时flag
 	rf.currentTerm = args.Term // 新的Term应该更高
+	
 	if len(rf.log) <= args.PrevLogIndex {
 		zlog.Debug("%d | %d | %2d | len(rf.log) <= args.PrevLogIndex, %d <= %d",
 			rf.me, rf.currentTerm, rf.leaderId, len(rf.log), args.PrevLogIndex)
@@ -469,15 +470,11 @@ func (rf *Raft) ticker() {
 		// be started and to randomize sleeping time using
 		// time.Sleep().
 
-		// 如果本节点是leader，则发送心跳包，每 heartbeatTime 发送一次
-		// candidate 随时可能成为leader，要及时进行heartbeat, 所以不能长时间睡眠
-		if atomic.LoadInt32(&rf.state) != Follower {
-
+		// 如果已经是leader，则不运行超时机制，睡眠一个心跳时间
+		if atomic.LoadInt32(&rf.state) != Leader {
 			time.Sleep(heartbeatTime * time.Millisecond)
-			continue
 		}
 
-		// 如果是follower，则检测leader是否失效，重新进行选举
 		// 先将失效设置为1，leader的心跳包会将该值在检测期间重新置为 0
 		atomic.StoreInt32(&rf.leaderLost, 1)
 
@@ -485,8 +482,8 @@ func (rf *Raft) ticker() {
 		elapsedTime := GetRandomElapsedTime()
 		time.Sleep(time.Duration(elapsedTime) * time.Millisecond)
 
-		// 如果失效则参加选举
-		if atomic.LoadInt32(&rf.leaderLost) == 1 {
+		// 如果超时且不是Leader且参加选举
+		if atomic.LoadInt32(&rf.leaderLost) == 1 && atomic.LoadInt32(&rf.state) != Leader {
 			zlog.Debug("%d | %d | %2d | elapsedTime: %d (ms)", rf.me, rf.currentTerm, rf.leaderId, elapsedTime)
 			rf.elect()
 		}
@@ -518,22 +515,6 @@ func (rf *Raft) elect() {
 	// 选举票号统计，1为自己给自己投的票
 	var ballot int32 = 1
 
-	// 异步发现候选人状态超时，则退回 follower 身份
-	go func() {
-		// 候选人状态失效时间
-		elapsedTime := GetRandomElapsedTime()
-		time.Sleep(time.Duration(elapsedTime) * time.Millisecond)
-		rf.mu.Lock()
-		defer rf.mu.Unlock()
-		if rf.state == Candidate {
-			zlog.Debug("%d | %d | %2d | state: %s => follower, current election suspend",
-				rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state])
-			// 变回follower，重置投票参数
-			rf.state = Follower
-			rf.votedFor = -1
-		}
-	}()
-
 	// 向所有peer发送请求投票rpc
 	for server := range rf.peers {
 		// 排除自身
@@ -547,6 +528,8 @@ func (rf *Raft) elect() {
 			zlog.Debug("%d | %d | %2d | request vote %d", rf.me, rf.currentTerm, rf.leaderId, server1)
 			reply := &RequestVoteReply{}
 			if ok := rf.sendRequestVote(server1, args, reply); !ok {
+				zlog.Debug("%d | %d | %2d | rpc sendRequestVote failed: %d", rf.me, rf.currentTerm, rf.leaderId, server1)
+				// TODO 投票请求重试
 				return
 			}
 			if !reply.VoteGranted {
