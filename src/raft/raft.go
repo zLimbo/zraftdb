@@ -349,15 +349,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.state = Follower        // 无论原来状态是什么，状态更新为follower
 	rf.leaderLost = 0          // 重置超时flag
 	rf.currentTerm = args.Term // 新的Term应该更高
-	
+
+	logMatched := true
 	if len(rf.log) <= args.PrevLogIndex {
 		zlog.Debug("%d | %d | %2d | len(rf.log) <= args.PrevLogIndex, %d <= %d",
 			rf.me, rf.currentTerm, rf.leaderId, len(rf.log), args.PrevLogIndex)
-		return
-	}
-	if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		logMatched = false
+	} else if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
 		zlog.Debug("%d | %d | %2d | prevLogIndex: %d, rf.log[args.PrevLogIndex].Term != args.PrevLogTerm, %d != %d",
 			rf.me, rf.currentTerm, rf.leaderId, args.PrevLogIndex, rf.log[args.PrevLogIndex].Term, args.PrevLogTerm)
+		logMatched = false
+	}
+
+	if !logMatched {
+		// 优化：找到与leader最近日志的任期
+		index := MinInt(args.PrevLogIndex, len(rf.log)-1)
+		for ; rf.log[index].Term > args.PrevLogTerm; index-- {
+			// pass
+		}
+		reply.Term = rf.log[index].Term
 		return
 	}
 
@@ -624,7 +634,15 @@ func (rf *Raft) timingSend(server int) {
 			}
 			// 如果不成功，说明PrevLogIndex不匹配，递减nextIndex
 			if !reply.Success {
-				rf.nextIndex[server]--
+				if args.PrevLogTerm == reply.Term {
+					rf.nextIndex[server]--
+				} else {
+					index := rf.nextIndex[server] - 1
+					for ; rf.log[index].Term > reply.Term; index-- {
+						// pass
+					}
+					rf.nextIndex[server] = index
+				}
 				return
 			}
 			// 复制到副本成功
