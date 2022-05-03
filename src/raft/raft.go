@@ -77,7 +77,7 @@ var state2str = map[State]string{
 }
 
 const (
-	intervalTime         = 10
+	intervalTime         = 40
 	heartbeatTime        = 80
 	electionTimeoutFrom  = 600
 	electionTimeoutRange = 200
@@ -598,18 +598,29 @@ func (rf *Raft) heartbeat() {
 
 func (rf *Raft) timingSend(server int) {
 
+	logMatched := false
+	sendSize := 0
+	sendOk := false
 	for !rf.killed() && atomic.LoadInt32(&rf.state) == Leader {
 		go func() {
 			args := func() *AppendEntriesArgs {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
+				if logMatched {
+					// 指数递增拷贝
+					sendSize = MinInt(sendSize*2+1, len(rf.log))
+					logMatched = false
+				} else {
+					sendSize = 0
+				}
 				nextIndex := rf.nextIndex[server]
+				endIndex := MinInt(nextIndex+sendSize, len(rf.log))
 				return &AppendEntriesArgs{
 					Term:         rf.currentTerm,
 					LeaderId:     rf.me,
 					PrevLogIndex: nextIndex - 1,
 					PrevLogTerm:  rf.log[nextIndex-1].Term,
-					Entries:      rf.log[nextIndex:],
+					Entries:      rf.log[nextIndex:endIndex],
 					LeaderCommit: rf.commitIndex,
 				}
 			}()
@@ -618,12 +629,17 @@ func (rf *Raft) timingSend(server int) {
 			zlog.Debug("%d | %d | %2d | heartbeat to %d, PrevLogTerm %d, send %d entries: (%d, %d], commitIndex: %d",
 				rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm,
 				len(args.Entries), args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.LeaderCommit)
+
 			ok := rf.sendAppendEntries(server, args, reply)
-			if !ok {
-				return
-			}
+
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
+			sendOk = ok
+			if !ok {
+				zlog.Debug("%d | %d | %2d | heartbeat to %d, rpc sendAppendEntries failed",
+					rf.me, rf.currentTerm, rf.leaderId, server)
+				return
+			}
 			if rf.currentTerm < reply.Term {
 				zlog.Debug("%d | %d | %2d | state: %s => follower, higher term from %d, exit heartbeat",
 					rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state], server)
@@ -634,6 +650,8 @@ func (rf *Raft) timingSend(server int) {
 			}
 			// 如果不成功，说明PrevLogIndex不匹配，递减nextIndex
 			if !reply.Success {
+				zlog.Debug("%d | %d | %2d | heartbeat to %d, log match unsuccessful: prev.term=%d prev.index=%d reply.term=%d",
+					rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm, args.PrevLogTerm, reply.Term)
 				if args.PrevLogTerm == reply.Term {
 					rf.nextIndex[server]--
 				} else {
@@ -645,18 +663,27 @@ func (rf *Raft) timingSend(server int) {
 				}
 				return
 			}
+			// follower和leader日志匹配成功，可以发送后续日志
+			logMatched = true
+			if len(args.Entries) == 0 {
+				zlog.Debug("%d | %d | %2d | heartbeat to %d, log match successful: prev.term=%d prev.index=%d",
+					rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm, args.PrevLogTerm)
+				return
+			}
 			// 复制到副本成功
 			rf.nextIndex[server] = MaxInt(rf.nextIndex[server], args.PrevLogIndex+len(args.Entries)+1)
 			rf.matchIndex[server] = MaxInt(rf.matchIndex[server], args.PrevLogIndex+len(args.Entries))
-			// 判断是否需要递增 commitIndex
+			zlog.Debug("%d | %d | %2d | heartbeat to %d, log copy successful: follower.index=%d",
+				rf.me, rf.currentTerm, rf.leaderId, server, rf.nextIndex[server]-1)
+
+			// 判断是否需要递增 commitIndex，排序找出各个匹配的中位值就是半数以上都接受的日志
 			indexs := make([]int, len(rf.matchIndex))
 			copy(indexs, rf.matchIndex)
 			sort.Ints(indexs)
 			newCommitIndex := indexs[(len(indexs)-1)/2]
-			// 相同任期才允许同步
+			// 相同任期才允许apply，避免被commit日志被覆盖的情况
 			if rf.log[newCommitIndex].Term == rf.currentTerm && newCommitIndex > rf.commitIndex {
 				oldCommitIndex := rf.commitIndex
-				rf.commitIndex = newCommitIndex
 				// apply 命令
 				for i := oldCommitIndex + 1; i <= newCommitIndex; i++ {
 					zlog.Debug("%d | %d | %2d | apply, commandIndex: %d",
@@ -666,16 +693,14 @@ func (rf *Raft) timingSend(server int) {
 						Command:      rf.log[i].Command,
 						CommandIndex: i,
 					}
+					rf.commitIndex = i
 				}
 			}
 		}()
 
-		// time.Sleep(heartbeatTime * time.Millisecond)
-		// continue
-
 		// 每隔 intervalTime 检查是否有新的日志需要同步，有则立即发送，否则等到 heartbeatTime 时间发送心跳包
 		// 包括了前面发错重发和nextIndex--的情况
-		for sumTime := intervalTime; sumTime < heartbeatTime; sumTime += intervalTime {
+		for sumTime := 0; sumTime <= heartbeatTime; sumTime += intervalTime {
 			time.Sleep(intervalTime * time.Millisecond)
 			// 检查是否已不是leader或被kill
 			if rf.killed() || atomic.LoadInt32(&rf.state) != Leader {
@@ -685,7 +710,7 @@ func (rf *Raft) timingSend(server int) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 				// 有新的日志需要同步
-				return len(rf.log)-1 >= rf.nextIndex[server]
+				return sendOk || len(rf.log)-1 >= rf.nextIndex[server]
 			}()
 			if needSend {
 				break
