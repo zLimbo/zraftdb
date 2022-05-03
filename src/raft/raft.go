@@ -257,21 +257,20 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	reply.Term = rf.currentTerm
 	lastLogIndex := len(rf.log) - 1
 	lastLogTerm := rf.log[lastLogIndex].Term
-	if rf.currentTerm <= args.Term &&
+
+	// 新的任期重置投票权
+	if rf.currentTerm < args.Term {
+		rf.currentTerm = args.Term
+		rf.votedFor = -1
+	}
+
+	if rf.currentTerm == args.Term &&
 		(rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
 		(lastLogTerm < args.LastLogTerm ||
 			lastLogTerm == args.LastLogTerm && lastLogIndex <= args.LastLogIndex) {
 		zlog.Debug("%d | %d | %2d | vote for %d", rf.me, rf.currentTerm, rf.leaderId, args.CandidateId)
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
-		// 定时重置投票权
-		go func() {
-			elapsedTime := rand.Intn(150) + 150
-			time.Sleep(time.Duration(elapsedTime) * time.Millisecond)
-			rf.mu.Lock()
-			defer rf.mu.Unlock()
-			rf.votedFor = -1
-		}()
 	} else {
 		reply.VoteGranted = false
 		zlog.Debug("%d | %d | %2d | reject vote for %d", rf.me, rf.currentTerm, rf.leaderId, args.CandidateId)
@@ -345,13 +344,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		zlog.Debug("%d | %d | %2d | state: %s => follower, new leader %d",
 			rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state], args.LeaderId)
 		rf.leaderId = args.LeaderId
-		rf.votedFor = -1
 	}
 
 	rf.state = Follower        // 无论原来状态是什么，状态更新为follower
 	rf.leaderLost = 0          // 重置超时flag
 	rf.currentTerm = args.Term // 新的Term应该更高
-
 	if len(rf.log) <= args.PrevLogIndex {
 		zlog.Debug("%d | %d | %2d | len(rf.log) <= args.PrevLogIndex, %d <= %d",
 			rf.me, rf.currentTerm, rf.leaderId, len(rf.log), args.PrevLogIndex)
@@ -378,7 +375,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.commitIndex = MinInt(args.LeaderCommit, len(rf.log)-1)
 
 	zlog.Debug("%d | %d | %2d | append %d entries: (%d, %d], commit: (%d, %d]",
-		rf.me, rf.currentTerm, rf.leaderId, len(args.Entries), args.PrevLogIndex, len(rf.log)-1, oldCommitIndex, rf.commitIndex)
+		rf.me, rf.currentTerm, rf.leaderId, len(args.Entries), args.PrevLogIndex,
+		len(rf.log)-1, oldCommitIndex, rf.commitIndex)
 
 	for i := oldCommitIndex + 1; i <= rf.commitIndex; i++ {
 		zlog.Debug("%d | %d | %2d | apply, commandIndex: %d",
@@ -504,11 +502,6 @@ func (rf *Raft) elect() {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 
-		// 如果已投票，则不进行选举
-		if rf.votedFor != -1 {
-			return nil
-		}
-
 		rf.currentTerm += 1  // 自增自己的当前term
 		rf.state = Candidate // 身份先变为candidate
 		rf.leaderId = -1     // 无主状态
@@ -521,11 +514,6 @@ func (rf *Raft) elect() {
 			LastLogTerm:  rf.log[len(rf.log)-1].Term,
 		}
 	}()
-
-	// 已投票，不进行选举
-	if args == nil {
-		return
-	}
 
 	// 选举票号统计，1为自己给自己投的票
 	var ballot int32 = 1
@@ -594,7 +582,6 @@ func (rf *Raft) elect() {
 					rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state])
 				rf.state = Leader
 				rf.leaderId = rf.me
-				rf.votedFor = -1
 				for i := range rf.nextIndex {
 					rf.nextIndex[i] = len(rf.log)
 					rf.matchIndex[i] = 0
