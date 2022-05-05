@@ -153,8 +153,8 @@ func (rf *Raft) persist() {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	// rf.mu.Lock()
+	// defer rf.mu.Unlock()
 	zlog.Debug("%d | %d | %2d | persist, votedFor=%d, log.len=%d",
 		rf.me, rf.currentTerm, rf.leaderId, rf.votedFor, len(rf.log))
 
@@ -196,8 +196,8 @@ func (rf *Raft) readPersist(data []byte) {
 		zlog.Error("%d | %d | %2d | read persist error.", rf.me, rf.currentTerm, rf.leaderId)
 	}
 
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
+	// rf.mu.Lock()
+	// defer rf.mu.Unlock()
 
 	rf.currentTerm = currentTerm
 	rf.votedFor = votedFor
@@ -386,6 +386,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 添加日志
 	rf.log = append(rf.log, args.Entries...)
 
+	if len(args.Entries) != 0 {
+		rf.persist()
+	}
+
 	// 推进commit和apply
 	oldCommitIndex := rf.commitIndex
 	rf.commitIndex = MinInt(args.LeaderCommit, len(rf.log)-1)
@@ -403,8 +407,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			CommandIndex: i,
 		}
 	}
-
-	go rf.persist()
 
 	reply.Success = true
 }
@@ -450,6 +452,8 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			rf.me, rf.currentTerm, rf.leaderId, term, index)
 		rf.nextIndex[rf.me] = index + 1
 		rf.matchIndex[rf.me] = index
+
+		rf.persist()
 	}
 
 	return index, term, isLeader
@@ -620,20 +624,24 @@ func (rf *Raft) timingSend(server int) {
 				} else {
 					sendSize = 0
 				}
-				nextIndex := rf.nextIndex[server]
-				endIndex := MinInt(nextIndex+sendSize, len(rf.log))
+				startIndex := rf.nextIndex[server]
+				endIndex := MinInt(startIndex+sendSize, len(rf.log))
+
+				zlog.Debug("%d | %d | %2d | set args to %d, PrevLogIndex=%d, rf.nextIndex[server]=%d",
+					rf.me, rf.currentTerm, rf.leaderId, server, startIndex-1, rf.nextIndex[server])
+
 				return &AppendEntriesArgs{
 					Term:         rf.currentTerm,
 					LeaderId:     rf.me,
-					PrevLogIndex: nextIndex - 1,
-					PrevLogTerm:  rf.log[nextIndex-1].Term,
-					Entries:      rf.log[nextIndex:endIndex],
+					PrevLogIndex: startIndex - 1,
+					PrevLogTerm:  rf.log[startIndex-1].Term,
+					Entries:      rf.log[startIndex:endIndex],
 					LeaderCommit: rf.commitIndex,
 				}
 			}()
 			reply := &AppendEntriesReply{}
 
-			zlog.Debug("%d | %d | %2d | heartbeat to %d, PrevLogTerm=%d, send %d entries: (%d, %d], commitIndex=%d",
+			zlog.Debug("%d | %d | %2d | send to %d, PrevLogTerm=%d, send %d entries: (%d, %d], commitIndex=%d",
 				rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm,
 				len(args.Entries), args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.LeaderCommit)
 
@@ -643,12 +651,12 @@ func (rf *Raft) timingSend(server int) {
 			defer rf.mu.Unlock()
 			sendOk = ok
 			if !ok {
-				zlog.Debug("%d | %d | %2d | heartbeat to %d, rpc sendAppendEntries failed",
+				zlog.Debug("%d | %d | %2d | response from %d, rpc sendAppendEntries failed",
 					rf.me, rf.currentTerm, rf.leaderId, server)
 				return
 			}
 			if rf.currentTerm < reply.Term {
-				zlog.Debug("%d | %d | %2d | state:%s=>follower, higher term from %d, exit heartbeat",
+				zlog.Debug("%d | %d | %2d | response from %d, higher term, state:%s=>follower, exit heartbeat",
 					rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state], server)
 				rf.currentTerm = reply.Term
 				rf.state = Follower
@@ -657,14 +665,16 @@ func (rf *Raft) timingSend(server int) {
 			}
 			// 如果不成功，说明PrevLogIndex不匹配，递减nextIndex
 			if !reply.Success {
-				zlog.Debug("%d | %d | %2d | heartbeat to %d, log match unsuccessful: prev.term=%d prev.index=%d reply.term=%d",
-					rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm, args.PrevLogTerm, reply.Term)
+				zlog.Debug("%d | %d | %2d | response from %d, log match unsuccessful: prev.term=%d prev.index=%d reply.term=%d",
+					rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm, args.PrevLogIndex, reply.Term)
 				if args.PrevLogTerm == reply.Term {
 					rf.nextIndex[server]--
 				} else {
-					index := rf.nextIndex[server] - 1
+					index := args.PrevLogIndex - 1
 					for ; rf.log[index].Term > reply.Term; index-- {
 						// pass
+						zlog.Debug("%d | %d | %2d | index=%d, rf.log[%d].Term=%d, reply.Term=%d",
+							rf.me, rf.currentTerm, rf.leaderId, index, index, rf.log[index].Term, reply.Term)
 					}
 					// 相同任期
 					rf.nextIndex[server] = index + 1
@@ -674,14 +684,14 @@ func (rf *Raft) timingSend(server int) {
 			// follower和leader日志匹配成功，可以发送后续日志
 			logMatched = true
 			if len(args.Entries) == 0 {
-				zlog.Debug("%d | %d | %2d | heartbeat to %d, log match successful: prev.term=%d prev.index=%d",
-					rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm, args.PrevLogTerm)
+				zlog.Debug("%d | %d | %2d | response from %d, log match successful: prev.term=%d prev.index=%d",
+					rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm, args.PrevLogIndex)
 				return
 			}
 			// 复制到副本成功
 			rf.nextIndex[server] = MaxInt(rf.nextIndex[server], args.PrevLogIndex+len(args.Entries)+1)
 			rf.matchIndex[server] = MaxInt(rf.matchIndex[server], args.PrevLogIndex+len(args.Entries))
-			zlog.Debug("%d | %d | %2d | heartbeat to %d, log copy successful: follower.index=%d",
+			zlog.Debug("%d | %d | %2d | response from %d, log copy successful: follower.index=%d",
 				rf.me, rf.currentTerm, rf.leaderId, server, rf.nextIndex[server]-1)
 
 			// 判断是否需要递增 commitIndex，排序找出各个匹配的中位值就是半数以上都接受的日志
@@ -704,7 +714,6 @@ func (rf *Raft) timingSend(server int) {
 					rf.commitIndex = i
 				}
 			}
-			go rf.persist()
 		}()
 
 		// 每隔 intervalTime 检查是否有新的日志需要同步，有则立即发送，否则等到 heartbeatTime 时间发送心跳包
