@@ -20,7 +20,6 @@ package raft
 import (
 	//	"bytes"
 	"bytes"
-	"log"
 	"math/rand"
 	"sort"
 	"sync"
@@ -156,6 +155,8 @@ func (rf *Raft) persist() {
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
+	zlog.Debug("%d | %d | %2d | persist, votedFor=%d, log.len=%d",
+		rf.me, rf.currentTerm, rf.leaderId, rf.votedFor, len(rf.log))
 
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
@@ -192,14 +193,18 @@ func (rf *Raft) readPersist(data []byte) {
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
 		d.Decode(&log1) != nil {
-		log.Panicln("read persist error.")
-	} else {
-		rf.mu.Lock()
-		defer rf.mu.Unlock()
-		rf.currentTerm = currentTerm
-		rf.votedFor = votedFor
-		rf.log = log1
+		zlog.Error("%d | %d | %2d | read persist error.", rf.me, rf.currentTerm, rf.leaderId)
 	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	rf.currentTerm = currentTerm
+	rf.votedFor = votedFor
+	rf.log = log1
+
+	zlog.Debug("%d | %d | %2d | read persist, votedFor=%d, log.len=%d",
+		rf.me, rf.currentTerm, rf.leaderId, rf.votedFor, len(rf.log))
 }
 
 //
@@ -341,7 +346,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// 新的leader产生
 	if args.LeaderId != rf.leaderId {
-		zlog.Debug("%d | %d | %2d | state: %s => follower, new leader %d",
+		zlog.Debug("%d | %d | %2d | state:%s=>follower, new leader %d",
 			rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state], args.LeaderId)
 		rf.leaderId = args.LeaderId
 	}
@@ -356,7 +361,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			rf.me, rf.currentTerm, rf.leaderId, len(rf.log), args.PrevLogIndex)
 		logMatched = false
 	} else if rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
-		zlog.Debug("%d | %d | %2d | prevLogIndex: %d, rf.log[args.PrevLogIndex].Term != args.PrevLogTerm, %d != %d",
+		zlog.Debug("%d | %d | %2d | prevLogIndex=%d, rf.log[args.PrevLogIndex].Term != args.PrevLogTerm, %d != %d",
 			rf.me, rf.currentTerm, rf.leaderId, args.PrevLogIndex, rf.log[args.PrevLogIndex].Term, args.PrevLogTerm)
 		logMatched = false
 	}
@@ -390,7 +395,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		len(rf.log)-1, oldCommitIndex, rf.commitIndex)
 
 	for i := oldCommitIndex + 1; i <= rf.commitIndex; i++ {
-		zlog.Debug("%d | %d | %2d | apply, commandIndex: %d",
+		zlog.Debug("%d | %d | %2d | apply, commandIndex=%d",
 			rf.me, rf.currentTerm, rf.leaderId, i)
 		rf.applyCh <- ApplyMsg{
 			CommandValid: true,
@@ -398,6 +403,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			CommandIndex: i,
 		}
 	}
+
+	go rf.persist()
 
 	reply.Success = true
 }
@@ -439,7 +446,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Command: command,
 		})
 		index = len(rf.log) - 1
-		zlog.Debug("%d | %d | %2d | new log, term: %d, index: %d",
+		zlog.Debug("%d | %d | %2d | new log, term=%d, index=%d",
 			rf.me, rf.currentTerm, rf.leaderId, term, index)
 		rf.nextIndex[rf.me] = index + 1
 		rf.matchIndex[rf.me] = index
@@ -494,7 +501,7 @@ func (rf *Raft) ticker() {
 
 		// 如果超时且不是Leader且参加选举
 		if atomic.LoadInt32(&rf.leaderLost) == 1 && atomic.LoadInt32(&rf.state) != Leader {
-			zlog.Debug("%d | %d | %2d | elapsedTime: %d (ms)", rf.me, rf.currentTerm, rf.leaderId, elapsedTime)
+			zlog.Debug("%d | %d | %2d | elapsedTime=%d (ms)", rf.me, rf.currentTerm, rf.leaderId, elapsedTime)
 			rf.elect()
 		}
 	}
@@ -502,7 +509,7 @@ func (rf *Raft) ticker() {
 
 // 选举
 func (rf *Raft) elect() {
-	zlog.Debug("%d | %d | %2d | state: %s => candidate, elect",
+	zlog.Debug("%d | %d | %2d | state:%s=>candidate, elect",
 		rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state])
 
 	args := func() *RequestVoteArgs {
@@ -538,7 +545,7 @@ func (rf *Raft) elect() {
 			zlog.Debug("%d | %d | %2d | request vote %d", rf.me, rf.currentTerm, rf.leaderId, server1)
 			reply := &RequestVoteReply{}
 			if ok := rf.sendRequestVote(server1, args, reply); !ok {
-				zlog.Debug("%d | %d | %2d | rpc sendRequestVote failed: %d", rf.me, rf.currentTerm, rf.leaderId, server1)
+				zlog.Debug("%d | %d | %2d | rpc sendRequestVote failed=%d", rf.me, rf.currentTerm, rf.leaderId, server1)
 				// TODO 投票请求重试
 				return
 			}
@@ -548,7 +555,7 @@ func (rf *Raft) elect() {
 					rf.mu.Lock()
 					defer rf.mu.Unlock()
 					if rf.currentTerm < reply.Term {
-						zlog.Debug("%d | %d | %2d | state: %s => follower, higher term from %d",
+						zlog.Debug("%d | %d | %2d | state:%s=>follower, higher term from %d",
 							rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state], server1)
 						rf.state = Follower
 						rf.currentTerm = reply.Term
@@ -571,7 +578,7 @@ func (rf *Raft) elect() {
 			// 如果状态已不是candidate，则无法变为leader
 			if rf.state == Candidate {
 				// 本节点成为 leader
-				zlog.Debug("%d | %d | %2d | state: %s => leader",
+				zlog.Debug("%d | %d | %2d | state:%s=>leader",
 					rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state])
 				rf.state = Leader
 				rf.leaderId = rf.me
@@ -626,7 +633,7 @@ func (rf *Raft) timingSend(server int) {
 			}()
 			reply := &AppendEntriesReply{}
 
-			zlog.Debug("%d | %d | %2d | heartbeat to %d, PrevLogTerm %d, send %d entries: (%d, %d], commitIndex: %d",
+			zlog.Debug("%d | %d | %2d | heartbeat to %d, PrevLogTerm=%d, send %d entries: (%d, %d], commitIndex=%d",
 				rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm,
 				len(args.Entries), args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.LeaderCommit)
 
@@ -641,7 +648,7 @@ func (rf *Raft) timingSend(server int) {
 				return
 			}
 			if rf.currentTerm < reply.Term {
-				zlog.Debug("%d | %d | %2d | state: %s => follower, higher term from %d, exit heartbeat",
+				zlog.Debug("%d | %d | %2d | state:%s=>follower, higher term from %d, exit heartbeat",
 					rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state], server)
 				rf.currentTerm = reply.Term
 				rf.state = Follower
@@ -659,7 +666,8 @@ func (rf *Raft) timingSend(server int) {
 					for ; rf.log[index].Term > reply.Term; index-- {
 						// pass
 					}
-					rf.nextIndex[server] = index
+					// 相同任期
+					rf.nextIndex[server] = index + 1
 				}
 				return
 			}
@@ -686,7 +694,7 @@ func (rf *Raft) timingSend(server int) {
 				oldCommitIndex := rf.commitIndex
 				// apply 命令
 				for i := oldCommitIndex + 1; i <= newCommitIndex; i++ {
-					zlog.Debug("%d | %d | %2d | apply, commandIndex: %d",
+					zlog.Debug("%d | %d | %2d | apply, commandIndex=%d",
 						rf.me, rf.currentTerm, rf.leaderId, i)
 					rf.applyCh <- ApplyMsg{
 						CommandValid: true,
@@ -696,6 +704,7 @@ func (rf *Raft) timingSend(server int) {
 					rf.commitIndex = i
 				}
 			}
+			go rf.persist()
 		}()
 
 		// 每隔 intervalTime 检查是否有新的日志需要同步，有则立即发送，否则等到 heartbeatTime 时间发送心跳包
@@ -757,6 +766,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+
+	zlog.Debug("%d | %d | %2d | make raft, peers:%v", rf.me, rf.currentTerm, rf.leaderId, rf.peers)
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
