@@ -337,10 +337,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	reply.Term = rf.currentTerm
-	reply.Success = false
-
 	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.Success = false
 		return
 	}
 
@@ -351,9 +350,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.leaderId = args.LeaderId
 	}
 
-	rf.state = Follower        // 无论原来状态是什么，状态更新为follower
-	rf.leaderLost = 0          // 重置超时flag
-	rf.currentTerm = args.Term // 新的Term应该更高
+	atomic.StoreInt32(&rf.state, Follower) // 无论原来状态是什么，状态更新为follower
+	rf.leaderLost = 0                      // 重置超时flag
+	rf.currentTerm = args.Term             // 新的Term应该更高
 
 	logMatched := true
 	if len(rf.log) <= args.PrevLogIndex {
@@ -371,8 +370,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		index := MinInt(args.PrevLogIndex, len(rf.log)-1)
 		for ; rf.log[index].Term > args.PrevLogTerm; index-- {
 			// pass
+			zlog.Debug("%d | %d | %2d | index=%d, rf.log[%d].Term=%d, args.PrevLogTerm=%d",
+				rf.me, rf.currentTerm, rf.leaderId, index, index, rf.log[index].Term, args.PrevLogTerm)
 		}
+		zlog.Debug("%d | %d | %2d | index=%d, rf.log[%d].Term=%d, args.PrevLogTerm=%d",
+			rf.me, rf.currentTerm, rf.leaderId, index, index, rf.log[index].Term, args.PrevLogTerm)
 		reply.Term = rf.log[index].Term
+		reply.Success = false
 		return
 	}
 
@@ -408,6 +412,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 
+	reply.Term = rf.currentTerm
 	reply.Success = true
 }
 
@@ -520,10 +525,10 @@ func (rf *Raft) elect() {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 
-		rf.currentTerm += 1  // 自增自己的当前term
-		rf.state = Candidate // 身份先变为candidate
-		rf.leaderId = -1     // 无主状态
-		rf.votedFor = rf.me  // 竞选获得票数，自己会先给自己投一票，若其他人请求投票会失败
+		rf.currentTerm += 1                     // 自增自己的当前term
+		atomic.StoreInt32(&rf.state, Candidate) // 身份先变为candidate
+		rf.leaderId = -1                        // 无主状态
+		rf.votedFor = rf.me                     // 竞选获得票数，自己会先给自己投一票，若其他人请求投票会失败
 
 		return &RequestVoteArgs{
 			Term:         rf.currentTerm,
@@ -561,7 +566,7 @@ func (rf *Raft) elect() {
 					if rf.currentTerm < reply.Term {
 						zlog.Debug("%d | %d | %2d | state:%s=>follower, higher term from %d",
 							rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state], server1)
-						rf.state = Follower
+						atomic.StoreInt32(&rf.state, Follower)
 						rf.currentTerm = reply.Term
 						rf.leaderId = -1
 						rf.votedFor = -1
@@ -584,7 +589,7 @@ func (rf *Raft) elect() {
 				// 本节点成为 leader
 				zlog.Debug("%d | %d | %2d | state:%s=>leader",
 					rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state])
-				rf.state = Leader
+				atomic.StoreInt32(&rf.state, Leader)
 				rf.leaderId = rf.me
 				for i := range rf.nextIndex {
 					rf.nextIndex[i] = len(rf.log)
@@ -610,22 +615,34 @@ func (rf *Raft) heartbeat() {
 func (rf *Raft) timingSend(server int) {
 
 	logMatched := false
-	sendSize := 0
-	sendOk := false
+	nEntriesCopy := 1 // TODO 初始为0会出问题
+	nIdempotency := 0
+
 	for !rf.killed() && atomic.LoadInt32(&rf.state) == Leader {
+		// TODO: 并行发送rpc，会遇到state不是leader却依然发送和处理信息的情况, 也存在rpc幂等性问题
+
 		go func() {
-			args := func() *AppendEntriesArgs {
+			args, idIdempotency, ok := func() (*AppendEntriesArgs, int, bool) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
+
+				startIndex := rf.nextIndex[server]
+
+				if rf.killed() || atomic.LoadInt32(&rf.state) != Leader {
+					return nil, nIdempotency, false
+				}
+
+				if startIndex <= 0 {
+					return nil, nIdempotency, false
+				}
+
 				if logMatched {
 					// 指数递增拷贝
-					sendSize = MinInt(sendSize*2+1, len(rf.log))
-					logMatched = false
+					nEntriesCopy = MinInt(nEntriesCopy*2+1, len(rf.log)-startIndex)
+					// nEntriesCopy = len(rf.log)-startIndex
 				} else {
-					sendSize = 0
+					nEntriesCopy = MinInt(1, len(rf.log)-startIndex)
 				}
-				startIndex := rf.nextIndex[server]
-				endIndex := MinInt(startIndex+sendSize, len(rf.log))
 
 				zlog.Debug("%d | %d | %2d | set args to %d, PrevLogIndex=%d, rf.nextIndex[server]=%d",
 					rf.me, rf.currentTerm, rf.leaderId, server, startIndex-1, rf.nextIndex[server])
@@ -635,38 +652,63 @@ func (rf *Raft) timingSend(server int) {
 					LeaderId:     rf.me,
 					PrevLogIndex: startIndex - 1,
 					PrevLogTerm:  rf.log[startIndex-1].Term,
-					Entries:      rf.log[startIndex:endIndex],
+					Entries:      rf.log[startIndex : startIndex+nEntriesCopy],
 					LeaderCommit: rf.commitIndex,
-				}
+				}, nIdempotency, true
 			}()
-			reply := &AppendEntriesReply{}
+
+			if !ok {
+				return
+			}
 
 			zlog.Debug("%d | %d | %2d | send to %d, PrevLogTerm=%d, send %d entries: (%d, %d], commitIndex=%d",
 				rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm,
-				len(args.Entries), args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.LeaderCommit)
+				nEntriesCopy, args.PrevLogIndex, args.PrevLogIndex+nEntriesCopy, args.LeaderCommit)
 
-			ok := rf.sendAppendEntries(server, args, reply)
+			reply := &AppendEntriesReply{}
+			rpcOk := rf.sendAppendEntries(server, args, reply)
 
 			rf.mu.Lock()
 			defer rf.mu.Unlock()
-			sendOk = ok
-			if !ok {
-				zlog.Debug("%d | %d | %2d | response from %d, rpc sendAppendEntries failed",
-					rf.me, rf.currentTerm, rf.leaderId, server)
+
+			if rf.killed() || atomic.LoadInt32(&rf.state) != Leader {
 				return
 			}
+
+			// 如果已有当前rpc发送完成，则不进行后面的处理
+			if idIdempotency != nIdempotency {
+				return
+			}
+			nIdempotency++
+
+			if !rpcOk {
+				zlog.Debug("%d | %d | %2d | response from %d, rpc sendAppendEntries failed",
+					rf.me, rf.currentTerm, rf.leaderId, server)
+
+				logMatched = false
+				return
+			}
+
 			if rf.currentTerm < reply.Term {
 				zlog.Debug("%d | %d | %2d | response from %d, higher term, state:%s=>follower, exit heartbeat",
-					rf.me, rf.currentTerm, rf.leaderId, state2str[rf.state], server)
+					rf.me, rf.currentTerm, rf.leaderId, server, state2str[rf.state])
 				rf.currentTerm = reply.Term
-				rf.state = Follower
+				atomic.StoreInt32(&rf.state, Follower)
 				rf.leaderId = -1
 				return
 			}
-			// 如果不成功，说明PrevLogIndex不匹配，递减nextIndex
+
+			// 如果不成功，说明PrevLogIndex不匹配，递减nextIndex(或已经不是leader)
 			if !reply.Success {
+
 				zlog.Debug("%d | %d | %2d | response from %d, log match unsuccessful: prev.term=%d prev.index=%d reply.term=%d",
 					rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm, args.PrevLogIndex, reply.Term)
+
+				// 这种情况说明该节点已经不是leader
+				if args.PrevLogTerm < reply.Term {
+					return
+				}
+
 				if args.PrevLogTerm == reply.Term {
 					rf.nextIndex[server]--
 				} else {
@@ -679,18 +721,18 @@ func (rf *Raft) timingSend(server int) {
 					// 相同任期
 					rf.nextIndex[server] = index + 1
 				}
+				logMatched = false
 				return
 			}
-			// follower和leader日志匹配成功，可以发送后续日志
-			logMatched = true
-			if len(args.Entries) == 0 {
+
+			if nEntriesCopy == 0 {
 				zlog.Debug("%d | %d | %2d | response from %d, log match successful: prev.term=%d prev.index=%d",
 					rf.me, rf.currentTerm, rf.leaderId, server, args.PrevLogTerm, args.PrevLogIndex)
 				return
 			}
 			// 复制到副本成功
-			rf.nextIndex[server] = MaxInt(rf.nextIndex[server], args.PrevLogIndex+len(args.Entries)+1)
-			rf.matchIndex[server] = MaxInt(rf.matchIndex[server], args.PrevLogIndex+len(args.Entries))
+			rf.nextIndex[server] = MaxInt(rf.nextIndex[server], args.PrevLogIndex+nEntriesCopy+1)
+			rf.matchIndex[server] = MaxInt(rf.matchIndex[server], args.PrevLogIndex+nEntriesCopy)
 			zlog.Debug("%d | %d | %2d | response from %d, log copy successful: follower.index=%d",
 				rf.me, rf.currentTerm, rf.leaderId, server, rf.nextIndex[server]-1)
 
@@ -714,6 +756,8 @@ func (rf *Raft) timingSend(server int) {
 					rf.commitIndex = i
 				}
 			}
+			// follower和leader日志匹配成功，可以发送后续日志
+			logMatched = true
 		}()
 
 		// 每隔 intervalTime 检查是否有新的日志需要同步，有则立即发送，否则等到 heartbeatTime 时间发送心跳包
@@ -728,7 +772,7 @@ func (rf *Raft) timingSend(server int) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 				// 有新的日志需要同步
-				return sendOk || len(rf.log)-1 >= rf.nextIndex[server]
+				return len(rf.log)-1 >= rf.nextIndex[server]
 			}()
 			if needSend {
 				break
