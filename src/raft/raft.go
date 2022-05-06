@@ -78,12 +78,12 @@ var state2str = map[State]string{
 const (
 	intervalTime         = 40
 	heartbeatTime        = 80
-	electionTimeoutFrom  = 600
-	electionTimeoutRange = 200
+	electionTimeoutFrom  = 400
+	electionTimeoutRange = 400
 )
 
 func GetRandomElapsedTime() int {
-	return rand.Intn(electionTimeoutFrom) + electionTimeoutRange
+	return electionTimeoutFrom + rand.Intn(electionTimeoutRange)
 }
 
 //
@@ -160,6 +160,8 @@ func (rf *Raft) persist() {
 
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.votedFor)
+	// e.Encode(rf.commitIndex)
+	// e.Encode(rf.lastApplied)
 	e.Encode(rf.log)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
@@ -185,23 +187,25 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
-	r := bytes.NewBuffer(data)
-	d := labgob.NewDecoder(r)
+
 	var currentTerm int
 	var votedFor int
-	var log1 []LogEntry
+	var log []LogEntry
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
-		d.Decode(&log1) != nil {
+		d.Decode(&log) != nil {
 		zlog.Error("%d | %d | %2d | read persist error.", rf.me, rf.currentTerm, rf.leaderId)
 	}
 
-	// rf.mu.Lock()
-	// defer rf.mu.Unlock()
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
 	rf.currentTerm = currentTerm
 	rf.votedFor = votedFor
-	rf.log = log1
+	rf.log = log
 
 	zlog.Debug("%d | %d | %2d | read persist, votedFor=%d, log.len=%d",
 		rf.me, rf.currentTerm, rf.leaderId, rf.votedFor, len(rf.log))
@@ -366,13 +370,23 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	if !logMatched {
-		// 优化：找到与leader最近日志的任期
 		index := MinInt(args.PrevLogIndex, len(rf.log)-1)
-		for ; rf.log[index].Term > args.PrevLogTerm; index-- {
-			// pass
-			zlog.Debug("%d | %d | %2d | index=%d, rf.log[%d].Term=%d, args.PrevLogTerm=%d",
-				rf.me, rf.currentTerm, rf.leaderId, index, index, rf.log[index].Term, args.PrevLogTerm)
+		if rf.log[index].Term != args.PrevLogTerm {
+			// 如果term不等，则采用二分查找找到最近匹配的日志索引
+			left, right := 0, MinInt(args.PrevLogIndex, len(rf.log)-1)+1
+			for left < right {
+				mid := left + (right-left)/2
+				zlog.Debug("%d | %d | %2d | index=%d, rf.log[%d].Term=%d, args.PrevLogTerm=%d",
+					rf.me, rf.currentTerm, rf.leaderId, mid, mid, rf.log[mid].Term, args.PrevLogTerm)
+				if rf.log[mid].Term <= args.PrevLogTerm {
+					left = mid + 1
+				} else {
+					right = mid
+				}
+			}
+			index = left - 1
 		}
+
 		zlog.Debug("%d | %d | %2d | index=%d, rf.log[%d].Term=%d, args.PrevLogTerm=%d",
 			rf.me, rf.currentTerm, rf.leaderId, index, index, rf.log[index].Term, args.PrevLogTerm)
 		reply.Term = rf.log[index].Term
@@ -390,19 +404,27 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	// 添加日志
 	rf.log = append(rf.log, args.Entries...)
 
-	if len(args.Entries) != 0 {
-		rf.persist()
-	}
+	// 
+	rf.persist()
 
 	// 推进commit和apply
 	oldCommitIndex := rf.commitIndex
 	rf.commitIndex = MinInt(args.LeaderCommit, len(rf.log)-1)
+	rf.lastApplied = rf.commitIndex
+
+	// 异步apply
+	go rf.applyLogEntries(oldCommitIndex+1, rf.commitIndex)
 
 	zlog.Debug("%d | %d | %2d | append %d entries: (%d, %d], commit: (%d, %d]",
 		rf.me, rf.currentTerm, rf.leaderId, len(args.Entries), args.PrevLogIndex,
 		len(rf.log)-1, oldCommitIndex, rf.commitIndex)
 
-	for i := oldCommitIndex + 1; i <= rf.commitIndex; i++ {
+	reply.Term = rf.currentTerm
+	reply.Success = true
+}
+
+func (rf *Raft) applyLogEntries(left, right int) {
+	for i := left; i <= right; i++ {
 		zlog.Debug("%d | %d | %2d | apply, commandIndex=%d",
 			rf.me, rf.currentTerm, rf.leaderId, i)
 		rf.applyCh <- ApplyMsg{
@@ -411,9 +433,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			CommandIndex: i,
 		}
 	}
-
-	reply.Term = rf.currentTerm
-	reply.Success = true
 }
 
 func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
@@ -638,11 +657,12 @@ func (rf *Raft) timingSend(server int) {
 
 				if logMatched {
 					// 指数递增拷贝
-					nEntriesCopy = MinInt(nEntriesCopy*2+1, len(rf.log)-startIndex)
-					// nEntriesCopy = len(rf.log)-startIndex
+					// nEntriesCopy = MinInt(nEntriesCopy*nEntriesCopy+1, len(rf.log)-startIndex)
+					nEntriesCopy = len(rf.log)-startIndex
 				} else {
 					nEntriesCopy = MinInt(1, len(rf.log)-startIndex)
 				}
+				// nEntriesCopy = len(rf.log)-startIndex
 
 				zlog.Debug("%d | %d | %2d | set args to %d, PrevLogIndex=%d, rf.nextIndex[server]=%d",
 					rf.me, rf.currentTerm, rf.leaderId, server, startIndex-1, rf.nextIndex[server])
@@ -712,14 +732,25 @@ func (rf *Raft) timingSend(server int) {
 				if args.PrevLogTerm == reply.Term {
 					rf.nextIndex[server]--
 				} else {
-					index := args.PrevLogIndex - 1
-					for ; rf.log[index].Term > reply.Term; index-- {
-						// pass
+					// 二分优化快速查找
+					left, right := 0, args.PrevLogIndex
+					for left < right {
+						mid := left + (right-left)/2
+
 						zlog.Debug("%d | %d | %2d | index=%d, rf.log[%d].Term=%d, reply.Term=%d",
-							rf.me, rf.currentTerm, rf.leaderId, index, index, rf.log[index].Term, reply.Term)
+							rf.me, rf.currentTerm, rf.leaderId, mid, mid, rf.log[mid].Term, reply.Term)
+
+						if rf.log[mid].Term <= reply.Term {
+							left = mid + 1
+						} else {
+							right = mid
+						}
 					}
-					// 相同任期
-					rf.nextIndex[server] = index + 1
+					zlog.Debug("%d | %d | %2d | index=%d, rf.log[%d].Term=%d, reply.Term=%d",
+						rf.me, rf.currentTerm, rf.leaderId, left, left, rf.log[left].Term, reply.Term)
+
+					// 最近位置索引大一 (left - 1) + 1
+					rf.nextIndex[server] = left
 				}
 				logMatched = false
 				return
@@ -737,24 +768,20 @@ func (rf *Raft) timingSend(server int) {
 				rf.me, rf.currentTerm, rf.leaderId, server, rf.nextIndex[server]-1)
 
 			// 判断是否需要递增 commitIndex，排序找出各个匹配的中位值就是半数以上都接受的日志
-			indexs := make([]int, len(rf.matchIndex))
-			copy(indexs, rf.matchIndex)
-			sort.Ints(indexs)
-			newCommitIndex := indexs[(len(indexs)-1)/2]
+			indexes := make([]int, 0, len(rf.matchIndex)-1)
+			for i := 0; i < len(rf.peers); i++ {
+				if i != rf.me {
+					indexes = append(indexes, rf.matchIndex[i])
+				}
+			}
+			sort.Ints(indexes)
+			newCommitIndex := indexes[len(indexes)-len(rf.matchIndex)/2]
 			// 相同任期才允许apply，避免被commit日志被覆盖的情况
 			if rf.log[newCommitIndex].Term == rf.currentTerm && newCommitIndex > rf.commitIndex {
 				oldCommitIndex := rf.commitIndex
-				// apply 命令
-				for i := oldCommitIndex + 1; i <= newCommitIndex; i++ {
-					zlog.Debug("%d | %d | %2d | apply, commandIndex=%d",
-						rf.me, rf.currentTerm, rf.leaderId, i)
-					rf.applyCh <- ApplyMsg{
-						CommandValid: true,
-						Command:      rf.log[i].Command,
-						CommandIndex: i,
-					}
-					rf.commitIndex = i
-				}
+				rf.commitIndex = newCommitIndex
+				// 异步apply
+				go rf.applyLogEntries(oldCommitIndex+1, newCommitIndex)
 			}
 			// follower和leader日志匹配成功，可以发送后续日志
 			logMatched = true
@@ -817,6 +844,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		matchIndex:  make([]int, len(peers)),
 	}
 
+	
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 

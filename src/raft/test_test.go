@@ -855,6 +855,7 @@ func TestFigure8Unreliable2C(t *testing.T) {
 	// fmt.Println("sleep for 1 minute")
 	// time.Sleep(time.Minute)
 
+	fmt.Println("\ncfg.one")
 	cfg.one(rand.Int()%10000, servers, true)
 
 	cfg.end()
