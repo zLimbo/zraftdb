@@ -77,9 +77,10 @@ var state2str = map[State]string{
 
 const (
 	intervalTime         = 40
-	heartbeatTime        = 100
-	electionTimeoutFrom  = 400
+	heartbeatTime        = 80
+	electionTimeoutFrom  = 600
 	electionTimeoutRange = 200
+	leaderTimeout        = 1000
 )
 
 func GetRandomElapsedTime() int {
@@ -643,7 +644,7 @@ func (rf *Raft) elect() {
 					rf.nextIndex[i] = len(rf.log)
 					rf.matchIndex[i] = 0
 				}
-				rf.heartbeat()
+				go rf.heartbeat()
 			}
 		}()
 	}
@@ -652,57 +653,45 @@ func (rf *Raft) elect() {
 // 发送心跳
 func (rf *Raft) heartbeat() {
 
+	keepConnect := make(map[int]bool, len(rf.peers))
 	for server := range rf.peers {
 		if server == rf.me {
 			continue
 		}
-		go rf.timingSend(server)
+		go rf.timingSend(server, keepConnect)
 	}
 
-	// 定时发送心跳
-	// for !rf.killed() && atomic.LoadInt32(&rf.state) == Leader {
-
-	// 	args := func() *AppendEntriesArgs {
-	// 		rf.mu.Lock()
-	// 		defer rf.mu.Unlock()
-
-	// 		return &AppendEntriesArgs{
-	// 			Term:         rf.currentTerm,
-	// 			LeaderId:     rf.me,
-	// 			PrevLogIndex: -1,
-	// 			PrevLogTerm:  -1,
-	// 			Entries:      nil,
-	// 			LeaderCommit: -1,
-	// 		}
-	// 	}()
-
-	// 	for server := range rf.peers {
-	// 		if server == rf.me {
-	// 			continue
-	// 		}
-	// 		server1 := server
-	// 		args1 := args
-	// 		go func() {
-	// 			reply := &AppendEntriesReply{}
-	// 			ok := rf.sendAppendEntries(server1, args1, reply)
-
-	// 			rf.mu.Lock()
-	// 			defer rf.mu.Unlock()
-	// 			if ok && rf.currentTerm < reply.Term {
-	// 				zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, higher term, state:%s=>follower, exit heartbeat",
-	// 					rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-	// 					server1, state2str[atomic.LoadInt32(&rf.state)])
-	// 				rf.currentTerm = reply.Term
-	// 				atomic.StoreInt32(&rf.state, Follower)
-	// 				rf.leaderId = -1
-	// 				return
-	// 			}
-	// 		}()
-	// 	}
-	// }
+	for !rf.killed() && atomic.LoadInt32(&rf.state) == Leader {
+		func() {
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+			for i := 0; i < len(rf.peers); i++ {
+				keepConnect[i] = false
+			}
+		}()
+		time.Sleep(leaderTimeout * time.Millisecond)
+		func() {
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+			connectCount := 0
+			for i := 0; i < len(rf.peers); i++ {
+				if keepConnect[i] {
+					connectCount++
+				}
+			}
+			// 如果连接数少于半数，则退化为 follower
+			if connectCount < len(rf.peers)/2 {
+				zlog.Debug("%d|%2d|%d|%d|<%d,%d>| leader timeout, connect count=%d(<%d), state:%s=>follower",
+					rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+					connectCount, len(rf.peers)/2, state2str[atomic.LoadInt32(&rf.state)])
+				atomic.StoreInt32(&rf.state, Follower)
+				rf.leaderId = -1
+			}
+		}()
+	}
 }
 
-func (rf *Raft) timingSend(server int) {
+func (rf *Raft) timingSend(server int, keepConnect map[int]bool) {
 
 	logMatched := false
 	nEntriesCopy := 1 // TODO 初始为0会出问题
@@ -770,18 +759,20 @@ func (rf *Raft) timingSend(server int) {
 				rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 				server, idIdempotency, take)
 
-			if !rpcOk {
-				zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, rpc sendAppendEntries failed, take=%v",
-					rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-					server, take)
-				logMatched = false
-				return
-			}
-
 			nextId := -1
 			func() {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
+
+				if !rpcOk {
+					zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, rpc sendAppendEntries failed, take=%v",
+						rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+						server, take)
+					logMatched = false
+					return
+				}
+
+				keepConnect[server] = true
 
 				if rf.currentTerm < reply.Term {
 					zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, higher term, state:%s=>follower, exit heartbeat",
@@ -800,9 +791,9 @@ func (rf *Raft) timingSend(server int) {
 				nIdempotency++
 				nextId = nIdempotency
 
-				zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, id=%d",
-					rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-					server, idIdempotency)
+				// zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, id=%d",
+				// 	rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+				// 	server, idIdempotency)
 
 				// 如果不成功，说明PrevLogIndex不匹配，递减nextIndex(或已经不是leader)
 				if !reply.Success {
