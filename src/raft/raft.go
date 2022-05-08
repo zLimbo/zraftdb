@@ -340,6 +340,7 @@ type AppendEntriesArgs struct {
 
 type AppendEntriesReply struct {
 	Term    int  // currentTerm, for leader to update itself
+	LogIndex int // 换主后，为leader快速定位匹配日志
 	Success bool // success true if follower contained entry matching prevLogIndex and prevLogTerm
 }
 
@@ -401,13 +402,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| index=%d, rf.log[%d].Term=%d, args.PrevLogTerm=%d",
 			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 			index, index, rf.log[index].Term, args.PrevLogTerm)
+
 		reply.Term = rf.log[index].Term
+		reply.LogIndex = index
 		reply.Success = false
 		return
 	}
 
+	reply.Success = true
+	reply.Term = rf.currentTerm
+
 	// 可能接受到重发或更早的请求，只处理后发的请求
-	if rf.commitIndex > args.PrevLogIndex {
+	if args.PrevLogIndex < rf.commitIndex {
 		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| repeat or old rpc",
 			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term)
 		return
@@ -432,16 +438,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.commitIndex = MinInt(args.LeaderCommit, len(rf.log)-1)
 	rf.lastApplied = rf.commitIndex
 
-	// 异步apply
-	go rf.applyLogEntries(oldCommitIndex+1, rf.commitIndex)
+	// apply
+	rf.applyLogEntries(oldCommitIndex+1, rf.commitIndex)
 
 	zlog.Debug("%d|%2d|%d|%d|<%d,%d>| append %d entries: <%d, %d>, commit: <%d, %d>",
 		rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 		len(args.Entries), args.PrevLogIndex,
 		len(rf.log)-1, oldCommitIndex, rf.commitIndex)
-
-	reply.Term = rf.currentTerm
-	reply.Success = true
 }
 
 func (rf *Raft) applyLogEntries(left, right int) {
@@ -748,7 +751,7 @@ func (rf *Raft) timingSend(server int, keepConnect map[int]bool) {
 			zlog.Debug("%d|%2d|%d|%d|<%d,%d>| send to %d, PrevLogTerm=%d, send %d entries: <%d, %d>, commitIndex=%d",
 				rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 				server, args.PrevLogTerm,
-				nEntriesCopy, args.PrevLogIndex, args.PrevLogIndex+nEntriesCopy, args.LeaderCommit)
+				len(args.Entries), args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.LeaderCommit)
 
 			reply := &AppendEntriesReply{}
 			before := time.Now()
@@ -769,6 +772,7 @@ func (rf *Raft) timingSend(server int, keepConnect map[int]bool) {
 						rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 						server, take)
 					logMatched = false
+					nextId = nIdempotency
 					return
 				}
 
@@ -798,9 +802,9 @@ func (rf *Raft) timingSend(server int, keepConnect map[int]bool) {
 				// 如果不成功，说明PrevLogIndex不匹配，递减nextIndex(或已经不是leader)
 				if !reply.Success {
 
-					zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, log match unsuccessful: prev.term=%d prev.index=%d reply.term=%d",
+					zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, log match unsuccessful: prev.term=%d prev.index=%d reply.term=%d, reply.index=%d",
 						rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-						server, args.PrevLogTerm, args.PrevLogIndex, reply.Term)
+						server, args.PrevLogTerm, args.PrevLogIndex, reply.Term, reply.LogIndex)
 
 					// 这种情况说明该节点已经不是leader
 					if args.PrevLogTerm < reply.Term {
@@ -808,8 +812,11 @@ func (rf *Raft) timingSend(server int, keepConnect map[int]bool) {
 					}
 
 					if args.PrevLogTerm == reply.Term {
-						rf.nextIndex[server]--
+						rf.nextIndex[server] = reply.LogIndex + 1
+						logMatched = true
+						// rf.nextIndex[server]--
 					} else {
+						logMatched = false
 						// 二分优化快速查找
 						left, right := 0, args.PrevLogIndex
 						for left < right {
@@ -832,19 +839,19 @@ func (rf *Raft) timingSend(server int, keepConnect map[int]bool) {
 						// 最近位置索引大一 (left - 1) + 1
 						rf.nextIndex[server] = left
 					}
-					logMatched = false
+					
 					return
 				}
 
-				if nEntriesCopy == 0 {
+				if len(args.Entries) == 0 {
 					zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, log match successful: prev.term=%d prev.index=%d",
 						rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 						server, args.PrevLogTerm, args.PrevLogIndex)
 					return
 				}
 				// 复制到副本成功
-				rf.nextIndex[server] = MaxInt(rf.nextIndex[server], args.PrevLogIndex+nEntriesCopy+1)
-				rf.matchIndex[server] = MaxInt(rf.matchIndex[server], args.PrevLogIndex+nEntriesCopy)
+				rf.nextIndex[server] = MaxInt(rf.nextIndex[server], args.PrevLogIndex+len(args.Entries)+1)
+				rf.matchIndex[server] = MaxInt(rf.matchIndex[server], args.PrevLogIndex+len(args.Entries))
 				zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, log copy successful: follower.index=%d",
 					rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 					server, rf.nextIndex[server]-1)
@@ -862,8 +869,8 @@ func (rf *Raft) timingSend(server int, keepConnect map[int]bool) {
 				if rf.log[newCommitIndex].Term == rf.currentTerm && newCommitIndex > rf.commitIndex {
 					oldCommitIndex := rf.commitIndex
 					rf.commitIndex = newCommitIndex
-					// 异步apply
-					go rf.applyLogEntries(oldCommitIndex+1, newCommitIndex)
+					// apply
+					rf.applyLogEntries(oldCommitIndex+1, newCommitIndex)
 				}
 				// follower和leader日志匹配成功，可以发送后续日志
 				logMatched = true
