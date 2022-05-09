@@ -76,7 +76,7 @@ var state2str = map[State]string{
 }
 
 const (
-	intervalTime         = 40
+	intervalTime         = 20
 	heartbeatTime        = 80
 	electionTimeoutFrom  = 600
 	electionTimeoutRange = 200
@@ -339,9 +339,9 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int  // currentTerm, for leader to update itself
-	LogIndex int // 换主后，为leader快速定位匹配日志
-	Success bool // success true if follower contained entry matching prevLogIndex and prevLogTerm
+	Term     int  // currentTerm, for leader to update itself
+	LogIndex int  // 换主后，为leader快速定位匹配日志
+	Success  bool // success true if follower contained entry matching prevLogIndex and prevLogTerm
 }
 
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -411,13 +411,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	reply.Success = true
 	reply.Term = rf.currentTerm
-
-	// 可能接受到重发或更早的请求，只处理后发的请求
-	if args.PrevLogIndex < rf.commitIndex {
-		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| repeat or old rpc",
-			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term)
-		return
-	}
 
 	// 截断后面的日志
 	if len(rf.log) > args.PrevLogIndex+1 {
@@ -664,6 +657,10 @@ func (rf *Raft) heartbeat() {
 		go rf.timingSend(server, keepConnect)
 	}
 
+	// go rf.leaderDown(keepConnect)
+}
+
+func (rf *Raft) leaderDown(keepConnect map[int]bool) {
 	for !rf.killed() && atomic.LoadInt32(&rf.state) == Leader {
 		func() {
 			rf.mu.Lock()
@@ -697,221 +694,165 @@ func (rf *Raft) heartbeat() {
 func (rf *Raft) timingSend(server int, keepConnect map[int]bool) {
 
 	logMatched := false
-	nEntriesCopy := 1 // TODO 初始为0会出问题
-	nIdempotency := 0
-	rpcFinish := make(chan int, 100)
-
-	rpcFinish <- nIdempotency
+	nEntriesCopy := 0
 
 	for !rf.killed() && atomic.LoadInt32(&rf.state) == Leader {
 		// TODO: 并行发送rpc，会遇到state不是leader却依然发送和处理信息的情况, 也存在rpc幂等性问题
 
-		go func() {
-			args, idIdempotency, ok := func() (*AppendEntriesArgs, int, bool) {
-				rf.mu.Lock()
-				defer rf.mu.Unlock()
+		args := func() *AppendEntriesArgs {
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
 
-				startIndex := rf.nextIndex[server]
+			startIndex := rf.nextIndex[server]
 
-				if rf.killed() || atomic.LoadInt32(&rf.state) != Leader {
-					return nil, nIdempotency, false
-				}
-
-				if startIndex <= 0 {
-					return nil, nIdempotency, false
-				}
-
-				if logMatched {
-					// 指数递增拷贝
-					// nEntriesCopy = MinInt(nEntriesCopy*nEntriesCopy+1, len(rf.log)-startIndex)
-					nEntriesCopy = len(rf.log) - startIndex
-				} else {
-					nEntriesCopy = MinInt(1, len(rf.log)-startIndex)
-				}
-				// nEntriesCopy = len(rf.log)-startIndex
-
-				zlog.Debug("%d|%2d|%d|%d|<%d,%d>| set args to %d,  id=%d, PrevLogIndex=%d, rf.nextIndex[server]=%d",
-					rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-					server, nIdempotency, startIndex-1, rf.nextIndex[server])
-
-				return &AppendEntriesArgs{
-					Term:         rf.currentTerm,
-					LeaderId:     rf.me,
-					PrevLogIndex: startIndex - 1,
-					PrevLogTerm:  rf.log[startIndex-1].Term,
-					Entries:      rf.log[startIndex : startIndex+nEntriesCopy],
-					LeaderCommit: rf.commitIndex,
-				}, nIdempotency, true
-			}()
-
-			if !ok {
-				return
+			if logMatched {
+				// 指数递增拷贝
+				// nEntriesCopy = MinInt(nEntriesCopy*nEntriesCopy+1, len(rf.log)-startIndex)
+				nEntriesCopy = len(rf.log) - startIndex
+			} else {
+				nEntriesCopy = MinInt(1, len(rf.log)-startIndex)
 			}
+			// nEntriesCopy = len(rf.log)-startIndex
 
-			zlog.Debug("%d|%2d|%d|%d|<%d,%d>| send to %d, PrevLogTerm=%d, send %d entries: <%d, %d>, commitIndex=%d",
-				rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-				server, args.PrevLogTerm,
-				len(args.Entries), args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.LeaderCommit)
-
-			reply := &AppendEntriesReply{}
-			before := time.Now()
-			rpcOk := rf.sendAppendEntries(server, args, reply)
-			take := time.Since(before)
-
-			zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, id=%d, take=%v",
-				rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-				server, idIdempotency, take)
-
-			nextId := -1
-			func() {
-				rf.mu.Lock()
-				defer rf.mu.Unlock()
-
-				if !rpcOk {
-					zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, rpc sendAppendEntries failed, take=%v",
-						rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-						server, take)
-					logMatched = false
-					nextId = nIdempotency
-					return
-				}
-
-				keepConnect[server] = true
-
-				if rf.currentTerm < reply.Term {
-					zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, higher term, state:%s=>follower, exit heartbeat",
-						rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-						server, state2str[atomic.LoadInt32(&rf.state)])
-					rf.currentTerm = reply.Term
-					atomic.StoreInt32(&rf.state, Follower)
-					rf.leaderId = -1
-					return
-				}
-
-				// 如果已有当前rpc发送完成，则不进行后面的处理
-				if idIdempotency != nIdempotency {
-					return
-				}
-				nIdempotency++
-				nextId = nIdempotency
-
-				// zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, id=%d",
-				// 	rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-				// 	server, idIdempotency)
-
-				// 如果不成功，说明PrevLogIndex不匹配，递减nextIndex(或已经不是leader)
-				if !reply.Success {
-
-					zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, log match unsuccessful: prev.term=%d prev.index=%d reply.term=%d, reply.index=%d",
-						rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-						server, args.PrevLogTerm, args.PrevLogIndex, reply.Term, reply.LogIndex)
-
-					// 这种情况说明该节点已经不是leader
-					if args.PrevLogTerm < reply.Term {
-						return
-					}
-
-					if args.PrevLogTerm == reply.Term {
-						rf.nextIndex[server] = reply.LogIndex + 1
-						logMatched = true
-						// rf.nextIndex[server]--
-					} else {
-						logMatched = false
-						// 二分优化快速查找
-						left, right := 0, args.PrevLogIndex
-						for left < right {
-							mid := left + (right-left)/2
-
-							zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, index=%d, rf.log[%d].Term=%d, reply.Term=%d",
-								rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-								server, mid, mid, rf.log[mid].Term, reply.Term)
-
-							if rf.log[mid].Term <= reply.Term {
-								left = mid + 1
-							} else {
-								right = mid
-							}
-						}
-						zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d,  index=%d, rf.log[%d].Term=%d, reply.Term=%d",
-							rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-							server, left, left, rf.log[left].Term, reply.Term)
-
-						// 最近位置索引大一 (left - 1) + 1
-						rf.nextIndex[server] = left
-					}
-					
-					return
-				}
-
-				if len(args.Entries) == 0 {
-					zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, log match successful: prev.term=%d prev.index=%d",
-						rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-						server, args.PrevLogTerm, args.PrevLogIndex)
-					return
-				}
-				// 复制到副本成功
-				rf.nextIndex[server] = MaxInt(rf.nextIndex[server], args.PrevLogIndex+len(args.Entries)+1)
-				rf.matchIndex[server] = MaxInt(rf.matchIndex[server], args.PrevLogIndex+len(args.Entries))
-				zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, log copy successful: follower.index=%d",
-					rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-					server, rf.nextIndex[server]-1)
-
-				// 判断是否需要递增 commitIndex，排序找出各个匹配的中位值就是半数以上都接受的日志
-				indexes := make([]int, 0, len(rf.matchIndex)-1)
-				for i := 0; i < len(rf.peers); i++ {
-					if i != rf.me {
-						indexes = append(indexes, rf.matchIndex[i])
-					}
-				}
-				sort.Ints(indexes)
-				newCommitIndex := indexes[len(indexes)-len(rf.matchIndex)/2]
-				// 相同任期才允许apply，避免被commit日志被覆盖的情况
-				if rf.log[newCommitIndex].Term == rf.currentTerm && newCommitIndex > rf.commitIndex {
-					oldCommitIndex := rf.commitIndex
-					rf.commitIndex = newCommitIndex
-					// apply
-					rf.applyLogEntries(oldCommitIndex+1, newCommitIndex)
-				}
-				// follower和leader日志匹配成功，可以发送后续日志
-				logMatched = true
-			}()
-
-			if nextId != -1 {
-				// 发送结束
-				rpcFinish <- nextId
+			return &AppendEntriesArgs{
+				Term:         rf.currentTerm,
+				LeaderId:     rf.me,
+				PrevLogIndex: startIndex - 1,
+				PrevLogTerm:  rf.log[startIndex-1].Term,
+				Entries:      rf.log[startIndex : startIndex+nEntriesCopy],
+				LeaderCommit: rf.commitIndex,
 			}
 		}()
 
-		select {
-		case <-rpcFinish:
-			// 前一个rpc发送成功，立即判断是否要发下一个，同时达到心跳时间发送心跳
-			for sumTime := 0; sumTime < heartbeatTime; sumTime += intervalTime {
-				// 检查是否已不是leader或被kill
-				if rf.killed() || atomic.LoadInt32(&rf.state) != Leader {
-					return
-				}
-				needSend := func() bool {
-					rf.mu.Lock()
-					defer rf.mu.Unlock()
-					// 有新的日志需要同步
-					return len(rf.log)-1 >= rf.nextIndex[server]
-				}()
-				if needSend {
-					break
-				}
-				time.Sleep(intervalTime * time.Millisecond)
-				if sumTime+intervalTime >= heartbeatTime {
-					zlog.Debug("%d|%2d|%d|%d|<%d,%d>| heartbeat to %d",
-						rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-						server)
-				}
+		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| send to %d, PrevLogTerm=%d, send %d entries: <%d, %d>, commitIndex=%d",
+			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+			server, args.PrevLogTerm,
+			len(args.Entries), args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.LeaderCommit)
+
+		reply := &AppendEntriesReply{}
+		before := time.Now()
+		ok := rf.sendAppendEntries(server, args, reply)
+		take := time.Since(before)
+
+		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, take=%v",
+			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+			server, take)
+
+		// 发送失败立刻重发
+		if !ok {
+			zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, rpc sendAppendEntries failed, take=%v",
+				rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+				server, take)
+			logMatched = false
+			continue
+		}
+
+		func() {
+			rf.mu.Lock()
+			defer rf.mu.Unlock()
+
+			keepConnect[server] = true
+
+			if rf.currentTerm < reply.Term {
+				zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, higher term, state:%s=>follower, exit heartbeat",
+					rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+					server, state2str[atomic.LoadInt32(&rf.state)])
+				rf.currentTerm = reply.Term
+				atomic.StoreInt32(&rf.state, Follower)
+				rf.leaderId = -1
+				return
 			}
 
-		case <-time.After(2 * intervalTime * time.Millisecond):
-			// 超时重发
-			zlog.Debug("%d|%2d|%d|%d|<%d,%d>| timeout send to %d",
+			// 如果不成功，说明PrevLogIndex不匹配，递减nextIndex(或已经不是leader)
+			if !reply.Success {
+
+				zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, log match unsuccessful: prev.term=%d prev.index=%d reply.term=%d, reply.index=%d",
+					rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+					server, args.PrevLogTerm, args.PrevLogIndex, reply.Term, reply.LogIndex)
+
+				// 这种情况说明该节点已经不是leader
+				if args.PrevLogTerm < reply.Term {
+					return
+				}
+
+				if args.PrevLogTerm == reply.Term {
+					rf.nextIndex[server] = reply.LogIndex + 1
+					logMatched = true
+					// rf.nextIndex[server]--
+				} else {
+					logMatched = false
+					// 二分优化快速查找
+					left, right := 0, args.PrevLogIndex
+					for left < right {
+						mid := left + (right-left)/2
+
+						zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, index=%d, rf.log[%d].Term=%d, reply.Term=%d",
+							rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+							server, mid, mid, rf.log[mid].Term, reply.Term)
+
+						if rf.log[mid].Term <= reply.Term {
+							left = mid + 1
+						} else {
+							right = mid
+						}
+					}
+					zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d,  index=%d, rf.log[%d].Term=%d, reply.Term=%d",
+						rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+						server, left, left, rf.log[left].Term, reply.Term)
+
+					// 最近位置索引大一 (left - 1) + 1
+					rf.nextIndex[server] = left
+				}
+
+				return
+			}
+
+			if len(args.Entries) == 0 {
+				zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, log match successful: prev.term=%d prev.index=%d",
+					rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+					server, args.PrevLogTerm, args.PrevLogIndex)
+				return
+			}
+			// 复制到副本成功
+			rf.nextIndex[server] = MaxInt(rf.nextIndex[server], args.PrevLogIndex+len(args.Entries)+1)
+			rf.matchIndex[server] = MaxInt(rf.matchIndex[server], args.PrevLogIndex+len(args.Entries))
+			zlog.Debug("%d|%2d|%d|%d|<%d,%d>| response from %d, log copy successful: follower.index=%d",
 				rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-				server)
+				server, rf.nextIndex[server]-1)
+
+			// 判断是否需要递增 commitIndex，排序找出各个匹配的中位值就是半数以上都接受的日志
+			indexes := make([]int, 0, len(rf.matchIndex)-1)
+			for i := 0; i < len(rf.peers); i++ {
+				if i != rf.me {
+					indexes = append(indexes, rf.matchIndex[i])
+				}
+			}
+			sort.Ints(indexes)
+			newCommitIndex := indexes[len(indexes)-len(rf.matchIndex)/2]
+			// 相同任期才允许apply，避免被commit日志被覆盖的情况
+			if rf.log[newCommitIndex].Term == rf.currentTerm && newCommitIndex > rf.commitIndex {
+				oldCommitIndex := rf.commitIndex
+				rf.commitIndex = newCommitIndex
+				// apply
+				rf.applyLogEntries(oldCommitIndex+1, newCommitIndex)
+			}
+			// follower和leader日志匹配成功，可以发送后续日志
+			logMatched = true
+		}()
+
+		// 前一个rpc发送成功，立即判断是否要发下一个，同时达到心跳时间发送心跳
+		for sumTime := 0; sumTime < heartbeatTime; sumTime += intervalTime {
+			// 检查是否已不是leader或被kill
+			needSend := func() bool {
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				// 有新的日志需要同步
+				return len(rf.log)-1 >= rf.nextIndex[server]
+			}()
+			if needSend {
+				break
+			}
+			time.Sleep(intervalTime * time.Millisecond)
 		}
 	}
 }
