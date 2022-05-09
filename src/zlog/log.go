@@ -3,6 +3,7 @@ package zlog
 import (
 	"fmt"
 	"log"
+	"time"
 )
 
 type LogLevel int
@@ -15,17 +16,20 @@ const (
 )
 
 var ZLogLevel LogLevel = InfoLevel
+var start time.Time
 
 func init() {
 	log.SetFlags(log.Lshortfile)
-	ZLogLevel = DebugLevel
+	// ZLogLevel = DebugLevel
+	start = time.Now()
 }
 
 func Debug(format string, v ...interface{}) {
 	if ZLogLevel > DebugLevel {
 		return
 	}
-	log.Output(2, fmt.Sprintf("Debug| "+format, v...))
+	take := fmt.Sprintf("%vms| ", time.Since(start).Milliseconds())
+	log.Output(2, fmt.Sprintf(take+format, v...))
 }
 
 func Info(format string, v ...interface{}) {
