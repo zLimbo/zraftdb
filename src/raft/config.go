@@ -18,7 +18,6 @@ import (
 
 	"6.824/labgob"
 	"6.824/labrpc"
-	"6.824/zlog"
 
 	crand "crypto/rand"
 	"encoding/base64"
@@ -539,7 +538,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 						return index
 					}
 				}
-				zlog.Debug("TEST | index=%d, nCommit=%d, cmd1=%v", index, nd, cmd1)
+				// zlog.Debug("TEST | index=%d, nCommit=%d, cmd1=%v", index, nd, cmd1)
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {
@@ -570,7 +569,7 @@ func (cfg *config) begin(description string) {
 // print the Passed message,
 // and some performance numbers.
 func (cfg *config) end() {
-	cfg.checkTimeout()
+	// cfg.checkTimeout()
 	if cfg.t.Failed() == false {
 		cfg.mu.Lock()
 		t := time.Since(cfg.t0).Seconds()       // real time

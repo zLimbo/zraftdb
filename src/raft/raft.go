@@ -153,12 +153,14 @@ func (rf *Raft) persist() {
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 
+	return
+
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 
 	// rf.mu.Lock()
 	// defer rf.mu.Unlock()
-	zlog.Debug("%d|%2d|%d|%d|<%d,%d>| persist, votedFor=%d, log.len=%d",
+	zlog.Trace("%d|%2d|%d|%d|<%d,%d>| persist, votedFor=%d, log.len=%d",
 		rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 		rf.votedFor, len(rf.log))
 
@@ -211,7 +213,7 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.votedFor = votedFor
 	rf.log = log
 
-	zlog.Debug("%d|%2d|%d|%d|<%d,%d>| read persist, votedFor=%d, log.len=%d",
+	zlog.Trace("%d|%2d|%d|%d|<%d,%d>| read persist, votedFor=%d, log.len=%d",
 		rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 		rf.votedFor, len(rf.log))
 }
@@ -410,7 +412,7 @@ func (rf *Raft) foundSameLog(args *AppendEntriesArgs, reply *AppendEntriesReply)
 		left, right := rf.commitIndex, index
 		for left < right {
 			mid := left + (right-left)/2
-			zlog.Debug("%d|%2d|%d|%d|<%d,%d>| from %d, no found same log, rf.log[%d].Term=%d, args.PrevLogTerm=%d",
+			zlog.Trace("%d|%2d|%d|%d|<%d,%d>| from %d, no found same log, rf.log[%d].Term=%d, args.PrevLogTerm=%d",
 				rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 				args.LeaderId, mid, rf.log[mid].Term, args.PrevLogTerm)
 			if rf.log[mid].Term <= args.PrevLogTerm {
@@ -435,9 +437,9 @@ func (rf *Raft) foundSameLog(args *AppendEntriesArgs, reply *AppendEntriesReply)
 func (rf *Raft) updateEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// 截断后面的日志
 	if len(rf.log) > args.PrevLogIndex+1 {
-		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| truncate log at %d",
+		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| from %d, truncate log, rf.len: %d => %d",
 			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-			args.PrevLogIndex)
+			args.LeaderId, len(rf.log), args.PrevLogIndex+1)
 		rf.log = rf.log[:args.PrevLogIndex+1]
 	}
 
@@ -453,15 +455,14 @@ func (rf *Raft) updateEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.applyLogEntries(oldCommitIndex+1, rf.commitIndex)
 	rf.lastApplied = rf.commitIndex
 
-	zlog.Debug("%d|%2d|%d|%d|<%d,%d>| append %d entries: <%d, %d>, commit: <%d, %d>",
+	zlog.Debug("%d|%2d|%d|%d|<%d,%d>| from %d, append %d entries: <%d, %d], commit: <%d, %d]",
 		rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
-		len(args.Entries), args.PrevLogIndex,
-		len(rf.log)-1, oldCommitIndex, rf.commitIndex)
+		args.LeaderId, len(args.Entries), args.PrevLogIndex, len(rf.log)-1, oldCommitIndex, rf.commitIndex)
 }
 
 func (rf *Raft) applyLogEntries(left, right int) {
 	for i := left; i <= right; i++ {
-		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| apply, commandIndex=%d",
+		zlog.Trace("%d|%2d|%d|%d|<%d,%d>| from %d, apply, commandIndex=%d",
 			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 			i)
 		rf.applyCh <- ApplyMsg{
@@ -536,8 +537,13 @@ func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
 
-	zlog.Debug("%d|%2d|%d|%d|<%d,%d>| killed",
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	zlog.Info("%d|%2d|%d|%d|<%d,%d>| killed",
 		rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term)
+
+	// if atomic.LoadInt32()
 }
 
 func (rf *Raft) killed() bool {
@@ -636,7 +642,7 @@ func (rf *Raft) ballotCount(server int, ballot *int, args *RequestVoteArgs, repl
 
 	// 超时后过期的消息
 	if args.Term != rf.currentTerm {
-		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| request vote %d, ok but expire, args.Term=%d, rf.currentTerm=%d",
+		zlog.Trace("%d|%2d|%d|%d|<%d,%d>| request vote %d, ok but expire, args.Term=%d, rf.currentTerm=%d",
 			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 			server, args.Term, rf.currentTerm)
 		return
@@ -657,7 +663,7 @@ func (rf *Raft) ballotCount(server int, ballot *int, args *RequestVoteArgs, repl
 	}
 	// 增加票数
 	*ballot++
-	zlog.Debug("%d|%2d|%d|%d|<%d,%d>| request vote %d, peer.num=%d, current ballot=%d",
+	zlog.Trace("%d|%2d|%d|%d|<%d,%d>| request vote %d, peer.num=%d, current ballot=%d",
 		rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 		server, len(rf.peers), *ballot)
 	// 须获得半数以上的投票才能成为leader
@@ -684,7 +690,7 @@ func (rf *Raft) ballotCount(server int, ballot *int, args *RequestVoteArgs, repl
 // 发送心跳
 func (rf *Raft) timingHeartbeatForAll() {
 
-	zlog.Debug("%d|%2d|%d|%d|<%d,%d>| timingHeartbeatForAll",
+	zlog.Trace("%d|%2d|%d|%d|<%d,%d>| timingHeartbeatForAll",
 		rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term)
 
 	half := len(rf.peers) / 2
@@ -776,7 +782,7 @@ func (rf *Raft) heartbeatForOne(server int) {
 
 	// 超时后过期的回复消息
 	if args.Term < rf.currentTerm {
-		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| heartbeat to %d, ok but expire, args.Term=%d, rf.currentTerm=%d, take=%v",
+		zlog.Trace("%d|%2d|%d|%d|<%d,%d>| heartbeat to %d, ok but expire, args.Term=%d, rf.currentTerm=%d, take=%v",
 			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 			server, args.Term, rf.currentTerm, take)
 		return
@@ -797,7 +803,7 @@ func (rf *Raft) heartbeatForOne(server int) {
 }
 
 func (rf *Raft) appendEntriesForAll() {
-	zlog.Debug("%d|%2d|%d|%d|<%d,%d>| appendEntriesForAll",
+	zlog.Trace("%d|%2d|%d|%d|<%d,%d>| appendEntriesForAll",
 		rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term)
 	for server := range rf.peers {
 		if server == rf.me {
@@ -808,7 +814,7 @@ func (rf *Raft) appendEntriesForAll() {
 }
 
 func (rf *Raft) timingAppendEntriesForOne(server int) {
-	zlog.Debug("%d|%2d|%d|%d|<%d,%d>| timingAppendEntriesForOne, server=%d",
+	zlog.Trace("%d|%2d|%d|%d|<%d,%d>| timingAppendEntriesForOne, server=%d",
 		rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 		server)
 	logMatched := false
@@ -868,7 +874,7 @@ func (rf *Raft) timingAppendEntriesForOne(server int) {
 			return
 		}
 
-		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| append entries to %d, entries=(%d, %d], PrevLogIndex=%d, PrevLogTerm=%d, LeaderCommit=%d",
+		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| append entries to %d, entries=<%d, %d], PrevLogIndex=%d, PrevLogTerm=%d, LeaderCommit=%d",
 			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 			server, args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.PrevLogIndex, args.PrevLogTerm, args.LeaderCommit)
 
@@ -897,7 +903,7 @@ func (rf *Raft) timingAppendEntriesForOne(server int) {
 
 			// 超时后过期的回复消息
 			if args.Term < rf.currentTerm {
-				zlog.Debug("%d|%2d|%d|%d|<%d,%d>| append entries to %d, ok but expire, args.Term=%d, rf.currentTerm=%d, take=%v",
+				zlog.Trace("%d|%2d|%d|%d|<%d,%d>| append entries to %d, ok but expire, args.Term=%d, rf.currentTerm=%d, take=%v",
 					rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 					server, args.Term, rf.currentTerm, take)
 				return
@@ -934,7 +940,7 @@ func (rf *Raft) timingAppendEntriesForOne(server int) {
 				rf.nextIndex[server] = rf.matchIndex[server] + 1
 			}
 
-			zlog.Debug("%d|%2d|%d|%d|<%d,%d>| append entries to %d, match ok, copy entries=(%d, %d], match.index=%d, next.index=%d",
+			zlog.Debug("%d|%2d|%d|%d|<%d,%d>| append entries to %d, match ok, copy entries=<%d, %d], match.index=%d, next.index=%d",
 				rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 				server, args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), rf.matchIndex[server], rf.nextIndex[server])
 
@@ -964,7 +970,7 @@ func (rf *Raft) matchNextIndex(server, prevLogIndex, prevLogTerm, replyLogIndex,
 	left, right := rf.matchIndex[server], replyLogIndex
 	for left < right {
 		mid := left + (right-left)/2
-		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| append entries to %d, for match, rf.log[%d].Term=%d, reply.Term=%d",
+		zlog.Trace("%d|%2d|%d|%d|<%d,%d>| append entries to %d, for match, rf.log[%d].Term=%d, reply.Term=%d",
 			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
 			server, mid, rf.log[mid].Term, replyLogTerm)
 		if rf.log[mid].Term <= replyLogTerm {
@@ -995,6 +1001,10 @@ func (rf *Raft) advanceLeaderCommit() {
 	// 相同任期才允许apply，避免被commit日志被覆盖的情况
 	if rf.log[newCommitIndex].Term == rf.currentTerm && newCommitIndex > rf.commitIndex {
 		// apply
+		zlog.Debug("%d|%2d|%d|%d|<%d,%d>| step commit: %d => %d",
+			rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, len(rf.log)-1, rf.log[len(rf.log)-1].Term,
+			rf.commitIndex, newCommitIndex)
+
 		rf.applyLogEntries(rf.commitIndex+1, newCommitIndex)
 		rf.commitIndex = newCommitIndex
 	}

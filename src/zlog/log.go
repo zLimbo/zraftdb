@@ -9,20 +9,25 @@ import (
 type LogLevel int
 
 const (
-	DebugLevel LogLevel = iota
+	TraceLevel LogLevel = iota
+	DebugLevel
 	InfoLevel
 	WarnLevel
 	ErrorLevel
 )
 
-const ZLogLevel = DebugLevel
+// const ZLogLevel = TraceLevel
 
-// const ZLogLevel = InfoLevel
+// const ZLogLevel = DebugLevel
+
+const ZLogLevel = InfoLevel
+
+// const ZLogLevel = WarnLevel
+
 var start time.Time
 
 func init() {
 	log.SetFlags(log.Lshortfile)
-	// ZLogLevel = DebugLevel
 	start = time.Now()
 }
 
@@ -30,6 +35,13 @@ func Log(format string, v ...interface{}) {
 	ms := time.Since(start).Milliseconds()
 	formatWithTime := fmt.Sprintf("%02d.%03ds| "+format, ms/1000, ms%1000)
 	log.Output(3, fmt.Sprintf(formatWithTime, v...))
+}
+
+func Trace(format string, v ...interface{}) {
+	if ZLogLevel > TraceLevel {
+		return
+	}
+	Log(fmt.Sprintf("Trace| "+format, v...))
 }
 
 func Debug(format string, v ...interface{}) {
