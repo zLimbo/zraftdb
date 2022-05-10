@@ -20,7 +20,7 @@ var start time.Time
 
 func init() {
 	log.SetFlags(log.Lshortfile)
-	// ZLogLevel = DebugLevel
+	ZLogLevel = DebugLevel
 	start = time.Now()
 }
 
