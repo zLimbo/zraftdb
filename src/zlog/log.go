@@ -15,39 +15,45 @@ const (
 	ErrorLevel
 )
 
-var ZLogLevel LogLevel = InfoLevel
+const ZLogLevel = DebugLevel
+
+// const ZLogLevel = InfoLevel
 var start time.Time
 
 func init() {
 	log.SetFlags(log.Lshortfile)
-	ZLogLevel = DebugLevel
+	// ZLogLevel = DebugLevel
 	start = time.Now()
+}
+
+func Log(format string, v ...interface{}) {
+	ms := time.Since(start).Milliseconds()
+	formatWithTime := fmt.Sprintf("%02d.%03ds| "+format, ms/1000, ms%1000)
+	log.Output(3, fmt.Sprintf(formatWithTime, v...))
 }
 
 func Debug(format string, v ...interface{}) {
 	if ZLogLevel > DebugLevel {
 		return
 	}
-	take := fmt.Sprintf("%vms| ", time.Since(start).Milliseconds())
-	log.Output(2, fmt.Sprintf(take+format, v...))
+	Log(fmt.Sprintf("DEBUG| "+format, v...))
 }
 
 func Info(format string, v ...interface{}) {
 	if ZLogLevel > InfoLevel {
 		return
 	}
-	log.Output(2, fmt.Sprintf("\033[32m"+"INFO| "+format+"\033[0m", v...))
+	Log(fmt.Sprintf("INFO| "+format, v...))
 }
 
 func Warn(format string, v ...interface{}) {
 	if ZLogLevel > WarnLevel {
 		return
 	}
-	log.Output(2, fmt.Sprintf("\033[33m"+"WARN| "+format+"\033[0m", v...))
+	Log(fmt.Sprintf("WARN| "+format, v...))
 }
 
 func Error(format string, v ...interface{}) {
-	s := fmt.Sprintf("\033[31m"+"ERROR| "+format+"\033[0m", v...)
-	log.Output(2, s)
-	panic(s)
+	Log(fmt.Sprintf("ERROR| "+format, v...))
+	panic("")
 }
