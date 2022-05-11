@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -8,7 +9,11 @@ import (
 )
 
 func TestBasicAgreeZ(t *testing.T) {
+	reqTime := 5.0 // 请求时间
+	reqSize := 128
+	batchSize := 1
 	servers := 7
+
 	cfg := make_config(t, servers, false, false)
 	defer cfg.cleanup()
 
@@ -32,16 +37,16 @@ OutLoop:
 	t1 := time.Now()
 
 	reqCount := int64(0)
-	for time.Since(t0).Seconds() < 5 {
-		leader.Start(reqCount)
+
+	format := fmt.Sprintf("%%0%dd", reqSize*batchSize)
+
+	for time.Since(t0).Seconds() < reqTime {
+		leader.Start(fmt.Sprintf(format, reqCount))
 		reqCount++
 	}
 
 	cfg.end()
 
-	if cfg.t.Failed() == false {
-
-	}
 	cfg.mu.Lock()
 	defer cfg.mu.Unlock()
 
@@ -49,8 +54,11 @@ OutLoop:
 
 	take := time.Since(t1).Seconds()
 	tps := float64(ncmds) / take
-	traffic := float64(ncmds) * 8 / take / 1024 / 1024
+	traffic := float64(ncmds) * float64(reqSize) * float64(batchSize) / take / 1024 / 1024
 
 	time.Sleep(100 * time.Millisecond)
 	zlog.Info("reqCount=%d, ncmds=%d, take=%.2fs, tps=%.2f, traffic=%.2fMB", reqCount, ncmds, take, tps, traffic)
+
+	s := fmt.Sprintf(format, reqCount)
+	zlog.Info("[%s], len=%d", s, len(s))
 }
