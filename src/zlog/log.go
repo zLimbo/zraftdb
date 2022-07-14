@@ -3,6 +3,8 @@ package zlog
 import (
 	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"time"
 )
 
@@ -15,14 +17,17 @@ const (
 	ErrorLevel
 )
 
-const ZLogLevel = DebugLevel
+// const ZLogLevel = DebugLevel
 
-// const ZLogLevel = InfoLevel
+var ZLogLevel = InfoLevel
 var start time.Time
 
 func init() {
 	log.SetFlags(log.Lshortfile)
 	// ZLogLevel = DebugLevel
+	envLogLevel := os.Getenv("Log")
+	level, _ := strconv.Atoi(envLogLevel)
+	ZLogLevel = LogLevel(level)
 	start = time.Now()
 }
 
