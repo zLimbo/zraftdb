@@ -108,6 +108,8 @@ func make_config(t *testing.T, n int, unreliable bool, snapshot bool) *config {
 
 // shut down a Raft server but save its persistent state.
 func (cfg *config) crash1(i int) {
+	zlog.Debug("TEST | crash1(%d)", i) // FIXME
+
 	cfg.disconnect(i)
 	cfg.net.DeleteServer(i) // disable client connections to the server.
 
@@ -309,7 +311,7 @@ func (cfg *config) cleanup() {
 // attach server i to the net.
 func (cfg *config) connect(i int) {
 	// fmt.Printf("connect(%d)\n", i)
-
+	zlog.Debug("TEST | connect(%d)\n", i)
 	cfg.connected[i] = true
 
 	// outgoing ClientEnds
@@ -332,7 +334,7 @@ func (cfg *config) connect(i int) {
 // detach server i from the net.
 func (cfg *config) disconnect(i int) {
 	// fmt.Printf("disconnect(%d)\n", i)
-
+	zlog.Debug("TEST | disconnect(%d)", i) // FIXME
 	cfg.connected[i] = false
 
 	// outgoing ClientEnds
@@ -539,7 +541,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 						return index
 					}
 				}
-				zlog.Debug("TEST | index=%d, nCommit=%d, cmd1=%v", index, nd, cmd1)
+				zlog.Debug("TEST | index=%d, nCommit=%d, cmd1=%v", index, nd, cmd1) // FIXME
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {
