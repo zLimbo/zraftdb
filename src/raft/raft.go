@@ -120,57 +120,131 @@ type Raft struct {
 	peerConnBmap int32
 
 	headIndex int
-	logMu     sync.Mutex
+	rw        sync.RWMutex
 }
 
 func (rf *Raft) stateStr() string {
 	return state2str[atomic.LoadInt32(&rf.state)]
 }
 
-// ============================================ FIXME: 日志操作，后期封装
 func (rf *Raft) logInfo() string {
 	if zlog.ZLogLevel >= zlog.InfoLevel {
 		return ""
 	}
-	rf.logMu.Lock()
-	defer rf.logMu.Unlock()
-	lastLogIndex := rf.headIndex + len(rf.log) - 1
-	lastLogTerm := rf.log[len(rf.log)-1].Term
-	return fmt.Sprintf("%d|%2d|%d|%d|<%d,%d>| ",
-		rf.me, rf.leaderId, rf.currentTerm, rf.commitIndex, lastLogIndex, lastLogTerm)
+	lastLogIndex := rf.getLastLogIndex()
+	lastLogTerm := rf.getLog(lastLogIndex).Term
+	return fmt.Sprintf("%d|%2d|%d|<%d,%d,%d>| ",
+		rf.GetMe(), rf.GetLeaderId(), rf.GetCurrentTerm(),
+		lastLogIndex, lastLogTerm, rf.GetCommitIndex())
 }
 
+// ============================================ FIXME: 核心数据操作，读写锁封装
+
+func (rf *Raft) GetMe() int {
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
+	return rf.me
+}
+
+func (rf *Raft) GetLeaderId() int {
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
+	return rf.leaderId
+}
+
+func (rf *Raft) SetLeaderId(leaderId int) {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	rf.leaderId = leaderId
+}
+
+func (rf *Raft) GetCurrentTerm() int {
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
+	return rf.currentTerm
+}
+
+func (rf *Raft) SetCurrentTerm(currentTerm int) {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	rf.currentTerm = currentTerm
+}
+
+func (rf *Raft) GetCommitIndex() int {
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
+	return rf.commitIndex
+}
+
+func (rf *Raft) SetCommitIndex(commitIndex int) {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	rf.commitIndex = commitIndex
+}
+
+func (rf *Raft) GetLastApplied() int {
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
+	return rf.lastApplied
+}
+
+func (rf *Raft) SetLastApplied(lastApplied int) {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	rf.lastApplied = lastApplied
+}
+
+func (rf *Raft) GetVotedFor() int {
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
+	return rf.votedFor
+}
+
+func (rf *Raft) SetVotedFor(votedFor int) {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	rf.votedFor = votedFor
+}
+
+// ================================== FIXME: 读写日志
+
 func (rf *Raft) getLastLogIndex() int {
-	rf.logMu.Lock()
-	defer rf.logMu.Unlock()
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
 	return rf.headIndex + len(rf.log) - 1
 }
 
 func (rf *Raft) getLog(index int) LogEntry {
-	rf.logMu.Lock()
-	defer rf.logMu.Unlock()
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
 	memIndex := index - rf.headIndex
 	return rf.log[memIndex]
 }
 
 func (rf *Raft) getLogs(left, right int) []LogEntry {
-	rf.logMu.Lock()
-	defer rf.logMu.Unlock()
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
 	memLeft, memRight := left-rf.headIndex, right-rf.headIndex
 	return rf.log[memLeft:memRight]
 }
 
+func (rf *Raft) getAllLog() []LogEntry {
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
+	return rf.log
+}
+
 // >= index 的日志都舍弃
 func (rf *Raft) truncateAt(index int) {
-	rf.logMu.Lock()
-	defer rf.logMu.Unlock()
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
 	memIndex := index - rf.headIndex
 	rf.log = rf.log[:memIndex]
 }
 
 func (rf *Raft) appendLog(entries ...LogEntry) {
-	rf.logMu.Lock()
-	defer rf.logMu.Unlock()
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
 	rf.log = append(rf.log, entries...)
 }
 
@@ -187,7 +261,7 @@ func (rf *Raft) GetState() (int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	term = rf.currentTerm
+	term = rf.GetCurrentTerm()
 	if atomic.LoadInt32(&rf.state) == Leader {
 		isleader = true
 	}
@@ -216,13 +290,13 @@ func (rf *Raft) persist() {
 	// rf.mu.Lock()
 	// defer rf.mu.Unlock()
 	zlog.Debug(rf.logInfo()+"persist, votedFor=%d, LastLogIndex=%d",
-		rf.votedFor, rf.getLastLogIndex())
+		rf.GetVotedFor(), rf.getLastLogIndex())
 
-	e.Encode(rf.currentTerm)
-	e.Encode(rf.votedFor)
-	// e.Encode(rf.commitIndex)
+	e.Encode(rf.GetCurrentTerm())
+	e.Encode(rf.GetVotedFor())
+	// e.Encode(rf.getCommitIndex())
 	// e.Encode(rf.lastApplied)
-	e.Encode(rf.log)
+	e.Encode(rf.getAllLog())
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 }
@@ -257,18 +331,18 @@ func (rf *Raft) readPersist(data []byte) {
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
 		d.Decode(&log) != nil {
-		zlog.Error(rf.logInfo()+"read persist error.", rf.me, rf.currentTerm, rf.leaderId)
+		zlog.Error(rf.logInfo()+"read persist error.", rf.GetMe(), rf.GetCurrentTerm(), rf.GetLeaderId())
 	}
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	rf.currentTerm = currentTerm
-	rf.votedFor = votedFor
+	rf.SetCurrentTerm(currentTerm)
+	rf.SetVotedFor(votedFor)
 	rf.log = log
 
 	zlog.Debug(rf.logInfo()+"read persist, votedFor=%d, LastLogIndex=%d",
-		rf.votedFor, rf.getLastLogIndex())
+		rf.GetVotedFor(), rf.getLastLogIndex())
 }
 
 //
@@ -323,26 +397,26 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	reply.Term = rf.currentTerm
+	reply.Term = rf.GetCurrentTerm()
 	lastLogIndex := rf.getLastLogIndex()
 	lastLogTerm := rf.getLog(lastLogIndex).Term
 
 	// 新的任期重置投票权
-	if rf.currentTerm < args.Term {
-		rf.currentTerm = args.Term
-		rf.votedFor = -1
+	if rf.GetCurrentTerm() < args.Term {
+		rf.SetCurrentTerm(args.Term)
+		rf.SetVotedFor(-1)
 		atomic.StoreInt32(&rf.state, Follower) // 如果是leader或candidate重新变回followe
 		// TODO 请求投票如果有更大任期则不能重置超时！！！
 		// atomic.StoreInt32(&rf.leaderLost, 0)   // 重置超时flag
 	}
 
-	if rf.currentTerm == args.Term &&
-		(rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
+	if rf.GetCurrentTerm() == args.Term &&
+		(rf.GetVotedFor() == -1 || rf.GetVotedFor() == args.CandidateId) &&
 		(lastLogTerm < args.LastLogTerm ||
 			lastLogTerm == args.LastLogTerm && lastLogIndex <= args.LastLogIndex) {
 		zlog.Debug(rf.logInfo()+"vote for %d", args.CandidateId)
 		reply.VoteGranted = true
-		rf.votedFor = args.CandidateId
+		rf.SetVotedFor(args.CandidateId)
 	} else {
 		reply.VoteGranted = false
 		zlog.Debug(rf.logInfo()+"reject vote for %d", args.CandidateId)
@@ -405,25 +479,25 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if args.Term < rf.currentTerm {
-		reply.Term = rf.currentTerm
+	if args.Term < rf.GetCurrentTerm() {
+		reply.Term = rf.GetCurrentTerm()
 		reply.Success = false
 		return
 	}
 
 	atomic.StoreInt32(&rf.state, Follower) // 无论原来状态是什么，状态更新为follower
 	atomic.StoreInt32(&rf.leaderLost, 0)   // 重置超时flag
-	rf.currentTerm = args.Term             // 新的Term应该更高
+	rf.SetCurrentTerm(args.Term)           // 新的Term应该更高
 
 	// 新的leader产生
-	if args.LeaderId != rf.leaderId {
+	if args.LeaderId != rf.GetLeaderId() {
 		zlog.Debug(rf.logInfo()+"state:%s=>follower, new leader %d",
 			rf.stateStr(), args.LeaderId)
-		rf.leaderId = args.LeaderId
+		rf.SetLeaderId(args.LeaderId)
 	}
 
 	reply.Success = true
-	reply.Term = rf.currentTerm
+	reply.Term = rf.GetCurrentTerm()
 
 	// leader 的心跳消息，直接返回
 	if args.PrevLogIndex < 0 {
@@ -457,7 +531,7 @@ func (rf *Raft) foundSameLog(args *AppendEntriesArgs, reply *AppendEntriesReply)
 	index := MinInt(args.PrevLogIndex, rf.getLastLogIndex())
 	if rf.getLog(index).Term > args.PrevLogTerm {
 		// 如果term不等，则采用二分查找找到最近匹配的日志索引
-		left, right := rf.commitIndex, index
+		left, right := rf.GetCommitIndex(), index
 		for left < right {
 			mid := left + (right-left)/2
 			zlog.Debug(rf.logInfo()+"from %d, no found same log, rf.getLog(%d).Term=%d, args.PrevLogTerm=%d",
@@ -496,13 +570,13 @@ func (rf *Raft) updateEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.persist()
 
 	// 推进commit和apply
-	oldCommitIndex := rf.commitIndex
-	rf.commitIndex = MinInt(args.LeaderCommit, rf.getLastLogIndex())
-	rf.applyLogEntries(oldCommitIndex+1, rf.commitIndex)
-	rf.lastApplied = rf.commitIndex
+	oldCommitIndex := rf.GetCommitIndex()
+	rf.SetCommitIndex(MinInt(args.LeaderCommit, rf.getLastLogIndex()))
+	rf.applyLogEntries(oldCommitIndex+1, rf.GetCommitIndex())
+	rf.SetLastApplied(rf.GetCommitIndex())
 
 	zlog.Debug(rf.logInfo()+"append %d entries: <%d, %d>, commit: <%d, %d>",
-		len(args.Entries), args.PrevLogIndex, rf.getLastLogIndex(), oldCommitIndex, rf.commitIndex)
+		len(args.Entries), args.PrevLogIndex, rf.getLastLogIndex(), oldCommitIndex, rf.GetCommitIndex())
 }
 
 func (rf *Raft) applyLogEntries(left, right int) {
@@ -545,17 +619,17 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	term = rf.currentTerm
+	term = rf.GetCurrentTerm()
 	if atomic.LoadInt32(&rf.state) == Leader {
 		isLeader = true
 		rf.appendLog(LogEntry{
-			Term:    rf.currentTerm,
+			Term:    rf.GetCurrentTerm(),
 			Command: command,
 		})
 		index = rf.getLastLogIndex()
 		zlog.Debug(rf.logInfo()+"new log, term=%d, index=%d", term, index)
-		rf.nextIndex[rf.me] = index + 1
-		rf.matchIndex[rf.me] = index
+		rf.nextIndex[rf.GetMe()] = index + 1
+		rf.matchIndex[rf.GetMe()] = index
 
 		rf.persist()
 	}
@@ -609,8 +683,7 @@ func (rf *Raft) ticker() {
 
 		// 如果超时且不是Leader且参加选举
 		if atomic.LoadInt32(&rf.leaderLost) == 1 && atomic.LoadInt32(&rf.state) != Leader {
-			zlog.Debug(rf.logInfo()+"elapsedTime=%d (ms)",
-				elapsedTime)
+			zlog.Debug(rf.logInfo()+"elapsedTime=%d (ms)", elapsedTime)
 			rf.elect()
 		}
 	}
@@ -624,16 +697,16 @@ func (rf *Raft) elect() {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 
-		rf.currentTerm += 1                     // 自增自己的当前term
-		atomic.StoreInt32(&rf.state, Candidate) // 身份先变为candidate
-		rf.leaderId = -1                        // 无主状态
-		rf.votedFor = rf.me                     // 竞选获得票数，自己会先给自己投一票，若其他人请求投票会失败
+		rf.SetCurrentTerm(rf.GetCurrentTerm() + 1) // 自增自己的当前term
+		atomic.StoreInt32(&rf.state, Candidate)    // 身份先变为candidate
+		rf.SetLeaderId(-1)                         // 无主状态
+		rf.SetVotedFor(rf.GetMe())                 // 竞选获得票数，自己会先给自己投一票，若其他人请求投票会失败
 
 		lastLogIndex := rf.getLastLogIndex()
 		lastLogTerm := rf.getLog(lastLogIndex).Term
 		return &RequestVoteArgs{
-			Term:         rf.currentTerm,
-			CandidateId:  rf.me,
+			Term:         rf.GetCurrentTerm(),
+			CandidateId:  rf.GetMe(),
 			LastLogIndex: lastLogIndex,
 			LastLogTerm:  lastLogTerm,
 		}
@@ -643,7 +716,7 @@ func (rf *Raft) elect() {
 	// 向所有peer发送请求投票rpc
 	for server := range rf.peers {
 		// 排除自身
-		if server == rf.me {
+		if server == rf.GetMe() {
 			continue
 		}
 		// 并发请求投票，成为leader的逻辑也在此处理
@@ -657,8 +730,7 @@ func (rf *Raft) elect() {
 			before := time.Now()
 			ok := rf.sendRequestVote(server1, args, reply)
 			take := time.Since(before)
-			zlog.Debug(rf.logInfo()+"request vote %d, ok=%v, take=%v",
-				server1, ok, take)
+			zlog.Debug(rf.logInfo()+"request vote %d, ok=%v, take=%v", server1, ok, take)
 			if !ok {
 				// TODO 投票请求重试
 				return
@@ -674,21 +746,21 @@ func (rf *Raft) ballotCount(server int, ballot *int, args *RequestVoteArgs, repl
 	defer rf.mu.Unlock()
 
 	// 超时后过期的消息
-	if args.Term != rf.currentTerm {
-		zlog.Debug(rf.logInfo()+"request vote %d, ok but expire, args.Term=%d, rf.currentTerm=%d",
-			server, args.Term, rf.currentTerm)
+	if args.Term != rf.GetCurrentTerm() {
+		zlog.Debug(rf.logInfo()+"request vote %d, ok but expire, args.Term=%d, rf.getCurrentTerm()=%d",
+			server, args.Term, rf.GetCurrentTerm())
 		return
 	}
 
 	if !reply.VoteGranted {
 		// 如果竞选的任期落后，则更新本节点的term，终止竞选
-		if rf.currentTerm < reply.Term {
+		if rf.GetCurrentTerm() < reply.Term {
 			zlog.Debug(rf.logInfo()+"state:%s=>follower, higher term from %d",
 				rf.stateStr(), server)
 			atomic.StoreInt32(&rf.state, Follower)
-			rf.currentTerm = reply.Term
-			rf.leaderId = -1
-			rf.votedFor = -1
+			rf.SetCurrentTerm(reply.Term)
+			rf.SetLeaderId(-1)
+			rf.SetVotedFor(-1)
 		}
 		return
 	}
@@ -705,12 +777,13 @@ func (rf *Raft) ballotCount(server int, ballot *int, args *RequestVoteArgs, repl
 		// 本节点成为 leader
 		zlog.Debug(rf.logInfo()+"state:%s=>leader", rf.stateStr())
 		atomic.StoreInt32(&rf.state, Leader)
-		rf.leaderId = rf.me
+		rf.SetLeaderId(rf.GetMe())
 		nextIndex := rf.getLastLogIndex() + 1
 		for i := range rf.nextIndex {
 			rf.nextIndex[i] = nextIndex
 			rf.matchIndex[i] = 0
 		}
+		go rf.Start(rf.GetMe())
 		go rf.timingHeartbeatForAll()
 		go rf.appendEntriesForAll()
 	}
@@ -728,7 +801,7 @@ func (rf *Raft) timingHeartbeatForAll() {
 		for t := 0; t < leaderTimeout; t += heartbeatTime {
 			peerConnBmap1 |= atomic.LoadInt32(&rf.peerConnBmap)
 			for server := range rf.peers {
-				if server == rf.me {
+				if server == rf.GetMe() {
 					continue
 				}
 				// 如果heartbeatTime时间内未发送rpc，则发送心跳
@@ -757,7 +830,7 @@ func (rf *Raft) timingHeartbeatForAll() {
 		zlog.Debug(rf.logInfo()+"leader timeout, connect count=%d(<%d), state:%s=>follower",
 			connectCount, half, rf.stateStr())
 		atomic.StoreInt32(&rf.state, Follower)
-		rf.leaderId = -1
+		rf.SetLeaderId(-1)
 		return
 	}
 }
@@ -771,8 +844,8 @@ func (rf *Raft) heartbeatForOne(server int) {
 			return nil, true
 		}
 		return &AppendEntriesArgs{
-			Term:         rf.currentTerm,
-			LeaderId:     rf.me,
+			Term:         rf.GetCurrentTerm(),
+			LeaderId:     rf.GetMe(),
 			PrevLogIndex: -1,
 			PrevLogTerm:  -1,
 		}, false
@@ -803,20 +876,20 @@ func (rf *Raft) heartbeatForOne(server int) {
 	}
 
 	// 超时后过期的回复消息
-	if args.Term < rf.currentTerm {
-		zlog.Debug(rf.logInfo()+"heartbeat to %d, ok but expire, args.Term=%d, rf.currentTerm=%d, take=%v",
-			server, args.Term, rf.currentTerm, take)
+	if args.Term < rf.GetCurrentTerm() {
+		zlog.Debug(rf.logInfo()+"heartbeat to %d, ok but expire, args.Term=%d, rf.getCurrentTerm()=%d, take=%v",
+			server, args.Term, rf.GetCurrentTerm(), take)
 		return
 	}
 
 	// 保持连接置位
 	atomic.StoreInt32(&rf.peerConnBmap, atomic.LoadInt32(&rf.peerConnBmap)|(1<<server))
 
-	if rf.currentTerm < reply.Term {
+	if rf.GetCurrentTerm() < reply.Term {
 		zlog.Debug(rf.logInfo()+"heartbeat to %d, higher term, state:%s=>follower", server, rf.stateStr())
-		rf.currentTerm = reply.Term
+		rf.SetCurrentTerm(reply.Term)
 		atomic.StoreInt32(&rf.state, Follower)
-		rf.leaderId = -1
+		rf.SetLeaderId(-1)
 		return
 	}
 }
@@ -824,7 +897,7 @@ func (rf *Raft) heartbeatForOne(server int) {
 func (rf *Raft) appendEntriesForAll() {
 	zlog.Debug(rf.logInfo() + "appendEntriesForAll")
 	for server := range rf.peers {
-		if server == rf.me {
+		if server == rf.GetMe() {
 			continue
 		}
 		go rf.timingAppendEntriesForOne(server)
@@ -849,7 +922,7 @@ func (rf *Raft) timingAppendEntriesForOne(server int) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 				// 有新的日志需要同步或有更新的commitIndex
-				return rf.getLastLogIndex() >= rf.nextIndex[server] || commitIndex != rf.commitIndex
+				return rf.getLastLogIndex() >= rf.nextIndex[server] || commitIndex != rf.GetCommitIndex()
 			}()
 			if needSend {
 				break
@@ -878,12 +951,12 @@ func (rf *Raft) timingAppendEntriesForOne(server int) {
 			}
 
 			return &AppendEntriesArgs{
-				Term:         rf.currentTerm,
-				LeaderId:     rf.me,
+				Term:         rf.GetCurrentTerm(),
+				LeaderId:     rf.GetMe(),
 				PrevLogIndex: startIndex - 1,
 				PrevLogTerm:  rf.getLog(startIndex - 1).Term,
 				Entries:      rf.getLogs(startIndex, startIndex+nEntriesCopy),
-				LeaderCommit: rf.commitIndex,
+				LeaderCommit: rf.GetCommitIndex(),
 			}, false
 		}()
 
@@ -899,8 +972,7 @@ func (rf *Raft) timingAppendEntriesForOne(server int) {
 		ok := rf.sendAppendEntries(server, args, reply)
 		take := time.Since(before)
 
-		zlog.Debug(rf.logInfo()+"append entries to %d, ok=%v, take=%v",
-			server, ok, take)
+		zlog.Debug(rf.logInfo()+"append entries to %d, ok=%v, take=%v", server, ok, take)
 
 		// 发送失败立刻重发
 		if !ok {
@@ -917,9 +989,9 @@ func (rf *Raft) timingAppendEntriesForOne(server int) {
 			}
 
 			// 超时后过期的回复消息
-			if args.Term < rf.currentTerm {
-				zlog.Debug(rf.logInfo()+"append entries to %d, ok but expire, args.Term=%d, rf.currentTerm=%d, take=%v",
-					server, args.Term, rf.currentTerm, take)
+			if args.Term < rf.GetCurrentTerm() {
+				zlog.Debug(rf.logInfo()+"append entries to %d, ok but expire, args.Term=%d, rf.getCurrentTerm()=%d, take=%v",
+					server, args.Term, rf.GetCurrentTerm(), take)
 				return
 			}
 
@@ -927,12 +999,12 @@ func (rf *Raft) timingAppendEntriesForOne(server int) {
 			atomic.StoreInt32(&rf.peerConnBmap, atomic.LoadInt32(&rf.peerConnBmap)|(1<<server))
 
 			// 遇到更高任期，成为follower
-			if rf.currentTerm < reply.Term {
+			if rf.GetCurrentTerm() < reply.Term {
 				zlog.Debug(rf.logInfo()+"append entries to %d, higher term, state:%s=>follower",
 					server, rf.stateStr())
-				rf.currentTerm = reply.Term
+				rf.SetCurrentTerm(reply.Term)
 				atomic.StoreInt32(&rf.state, Follower)
-				rf.leaderId = -1
+				rf.SetLeaderId(-1)
 				return
 			}
 
@@ -1002,17 +1074,17 @@ func (rf *Raft) advanceLeaderCommit() {
 	// 判断是否需要递增 commitIndex，排序找出各个匹配的中位值就是半数以上都接受的日志
 	indexes := make([]int, 0, len(rf.peers)-1)
 	for i := 0; i < len(rf.peers); i++ {
-		if i != rf.me {
+		if i != rf.GetMe() {
 			indexes = append(indexes, rf.matchIndex[i])
 		}
 	}
 	sort.Ints(indexes)
 	newCommitIndex := indexes[len(indexes)-len(rf.peers)/2]
 	// 相同任期才允许apply，避免被commit日志被覆盖的情况
-	if rf.getLog(newCommitIndex).Term == rf.currentTerm && newCommitIndex > rf.commitIndex {
+	if rf.getLog(newCommitIndex).Term == rf.GetCurrentTerm() && newCommitIndex > rf.GetCommitIndex() {
 		// apply
-		rf.applyLogEntries(rf.commitIndex+1, newCommitIndex)
-		rf.commitIndex = newCommitIndex
+		rf.applyLogEntries(rf.GetCommitIndex()+1, newCommitIndex)
+		rf.SetCommitIndex(newCommitIndex)
 	}
 }
 
@@ -1032,7 +1104,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// rf := &Raft{}
 	// rf.peers = peers
 	// rf.persister = persister
-	// rf.me = me
+	// rf.setMe(me)
 
 	// Your initialization code here (2A, 2B, 2C).
 
@@ -1055,8 +1127,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	zlog.Debug(rf.logInfo()+"make raft, peers.num:%d",
-		len(rf.peers))
+	zlog.Debug(rf.logInfo()+"make raft, peers.num:%d", len(rf.peers))
 
 	// start ticker goroutine to start elections
 	go rf.ticker()
