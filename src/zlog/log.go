@@ -25,7 +25,7 @@ var start time.Time
 func init() {
 	log.SetFlags(log.Lshortfile)
 	// ZLogLevel = DebugLevel
-	envLogLevel := os.Getenv("Log")
+	envLogLevel := os.Getenv("LOG")
 	level, _ := strconv.Atoi(envLogLevel)
 	ZLogLevel = LogLevel(level)
 	start = time.Now()
