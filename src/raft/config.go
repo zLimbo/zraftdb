@@ -138,6 +138,7 @@ func (cfg *config) crash1(i int) {
 	}
 }
 
+// 检查当前节点log是否与其他节点的log一致
 func (cfg *config) checkLogs(i int, m ApplyMsg) (string, bool) {
 	err_msg := ""
 	v := m.Command
@@ -165,6 +166,7 @@ func (cfg *config) applier(i int, applyCh chan ApplyMsg) {
 			// ignore other types of ApplyMsg
 		} else {
 			cfg.mu.Lock()
+			// prevok 前一个日志是否存在
 			err_msg, prevok := cfg.checkLogs(i, m)
 			cfg.mu.Unlock()
 			if m.CommandIndex > 1 && prevok == false {
@@ -189,6 +191,7 @@ func (cfg *config) applierSnap(i int, applyCh chan ApplyMsg) {
 		if m.SnapshotValid {
 			//DPrintf("Installsnapshot %v %v\n", m.SnapshotIndex, lastApplied)
 			cfg.mu.Lock()
+			// ? 使用快照替换 cfg.logs
 			if cfg.rafts[i].CondInstallSnapshot(m.SnapshotTerm,
 				m.SnapshotIndex, m.Snapshot) {
 				cfg.logs[i] = make(map[int]interface{})
@@ -539,7 +542,7 @@ func (cfg *config) one(cmd interface{}, expectedServers int, retry bool) int {
 						return index
 					}
 				}
-				zlog.Debug("TEST | index=%d, nCommit=%d, cmd1=%v", index, nd, cmd1)
+				zlog.Debug("TEST | index=%d, nCommit=%d, expectedServers=%d, cmd1=%v", index, nd, expectedServers, cmd1)
 				time.Sleep(20 * time.Millisecond)
 			}
 			if retry == false {

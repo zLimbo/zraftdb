@@ -119,8 +119,9 @@ type Raft struct {
 
 	peerConnBmap int32
 
-	headIndex int
 	rw        sync.RWMutex
+	headIndex int
+	snapshot  []byte
 }
 
 func (rf *Raft) stateStr() string {
@@ -133,9 +134,10 @@ func (rf *Raft) logInfo() string {
 	}
 	lastLogIndex := rf.getLastLogIndex()
 	lastLogTerm := rf.getLog(lastLogIndex).Term
-	return fmt.Sprintf("%d|%2d|%d|<%d,%d,%d>| ",
+	return fmt.Sprintf("<%d,%d,%d>|<%d,%d,%d>|<%d,%d>| ",
 		rf.GetMe(), rf.GetLeaderId(), rf.GetCurrentTerm(),
-		lastLogIndex, lastLogTerm, rf.GetCommitIndex())
+		lastLogTerm, lastLogIndex, rf.GetCommitIndex(),
+		rf.GetHeadIndex(), rf.getLastLogIndex()-rf.GetHeadIndex())
 }
 
 // ============================================ FIXME: 核心数据操作，读写锁封装
@@ -156,6 +158,18 @@ func (rf *Raft) SetLeaderId(leaderId int) {
 	rf.rw.Lock()
 	defer rf.rw.Unlock()
 	rf.leaderId = leaderId
+}
+
+func (rf *Raft) GetVotedFor() int {
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
+	return rf.votedFor
+}
+
+func (rf *Raft) SetVotedFor(votedFor int) {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	rf.votedFor = votedFor
 }
 
 func (rf *Raft) GetCurrentTerm() int {
@@ -194,16 +208,10 @@ func (rf *Raft) SetLastApplied(lastApplied int) {
 	rf.lastApplied = lastApplied
 }
 
-func (rf *Raft) GetVotedFor() int {
+func (rf *Raft) GetHeadIndex() int {
 	rf.rw.RLock()
 	defer rf.rw.RUnlock()
-	return rf.votedFor
-}
-
-func (rf *Raft) SetVotedFor(votedFor int) {
-	rf.rw.Lock()
-	defer rf.rw.Unlock()
-	rf.votedFor = votedFor
+	return rf.headIndex
 }
 
 // ================================== FIXME: 读写日志
@@ -217,7 +225,11 @@ func (rf *Raft) getLastLogIndex() int {
 func (rf *Raft) getLog(index int) LogEntry {
 	rf.rw.RLock()
 	defer rf.rw.RUnlock()
+
 	memIndex := index - rf.headIndex
+	if memIndex < 0 {
+		zlog.Debug("index=%d, headIndex=%d, memIndex=%d", index, rf.headIndex, memIndex)
+	}
 	return rf.log[memIndex]
 }
 
@@ -246,6 +258,14 @@ func (rf *Raft) appendLog(entries ...LogEntry) {
 	rf.rw.Lock()
 	defer rf.rw.Unlock()
 	rf.log = append(rf.log, entries...)
+}
+
+func (rf *Raft) snapShotLog(index int) {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	memIndex := index - rf.headIndex
+	rf.log = rf.log[memIndex:]
+	rf.headIndex = index
 }
 
 // ============================================ FIXME: 日志操作，后期封装
@@ -352,7 +372,10 @@ func (rf *Raft) readPersist(data []byte) {
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 
 	// Your code here (2D).
-
+	// Previously, this lab recommended that you implement a function called CondInstallSnapshot
+	// to avoid the requirement that snapshots and log entries sent on applyCh are coordinated.
+	// This vestigal API interface remains, but you are discouraged from implementing it:
+	// instead, we suggest that you simply have it return true.
 	return true
 }
 
@@ -363,6 +386,17 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 
+	// ! 异步执行, 否则会死锁，但异步会产生bug，尝试使用判断解决
+	go func() {
+		rf.mu.Lock()
+		defer rf.mu.Unlock()
+		if index <= rf.GetHeadIndex() {
+			return
+		}
+		rf.snapshot = snapshot
+		rf.snapShotLog(index)
+		zlog.Debug(rf.logInfo()+"snapshot, index=%d", index)
+	}()
 }
 
 //
@@ -579,6 +613,7 @@ func (rf *Raft) updateEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		len(args.Entries), args.PrevLogIndex, rf.getLastLogIndex(), oldCommitIndex, rf.GetCommitIndex())
 }
 
+// 在临界区中
 func (rf *Raft) applyLogEntries(left, right int) {
 	for i := left; i <= right; i++ {
 		zlog.Debug(rf.logInfo()+"apply, commandIndex=%d", i)
@@ -1070,6 +1105,7 @@ func (rf *Raft) matchNextIndex(server, prevLogIndex, prevLogTerm, replyLogIndex,
 	return false
 }
 
+// 在互斥区中
 func (rf *Raft) advanceLeaderCommit() {
 	// 判断是否需要递增 commitIndex，排序找出各个匹配的中位值就是半数以上都接受的日志
 	indexes := make([]int, 0, len(rf.peers)-1)
@@ -1083,6 +1119,7 @@ func (rf *Raft) advanceLeaderCommit() {
 	// 相同任期才允许apply，避免被commit日志被覆盖的情况
 	if rf.getLog(newCommitIndex).Term == rf.GetCurrentTerm() && newCommitIndex > rf.GetCommitIndex() {
 		// apply
+		zlog.Debug("leader apply log [%d, %d]", rf.GetCommitIndex()+1, newCommitIndex)
 		rf.applyLogEntries(rf.GetCommitIndex()+1, newCommitIndex)
 		rf.SetCommitIndex(newCommitIndex)
 	}

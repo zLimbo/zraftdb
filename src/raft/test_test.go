@@ -1012,6 +1012,7 @@ func TestUnreliableChurn2C(t *testing.T) {
 
 const MAXLOGSIZE = 2000
 
+// snapcommon(t, "Test (2D): snapshots basic", false, true, false) 
 func snapcommon(t *testing.T, name string, disconnect bool, reliable bool, crash bool) {
 	iters := 30
 	servers := 3
