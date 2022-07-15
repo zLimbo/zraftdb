@@ -340,14 +340,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		(rf.votedFor == -1 || rf.votedFor == args.CandidateId) &&
 		(lastLogTerm < args.LastLogTerm ||
 			lastLogTerm == args.LastLogTerm && lastLogIndex <= args.LastLogIndex) {
-		zlog.Debug(rf.logInfo()+"vote for %d",
-			args.CandidateId)
+		zlog.Debug(rf.logInfo()+"vote for %d", args.CandidateId)
 		reply.VoteGranted = true
 		rf.votedFor = args.CandidateId
 	} else {
 		reply.VoteGranted = false
-		zlog.Debug(rf.logInfo()+"reject vote for %d",
-			args.CandidateId)
+		zlog.Debug(rf.logInfo()+"reject vote for %d", args.CandidateId)
 	}
 }
 
@@ -446,10 +444,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 // 在临界区中
 func (rf *Raft) foundSameLog(args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	lastLogIndex := rf.getLastLogIndex()
-	if lastLogIndex < args.PrevLogIndex {
+	if rf.getLastLogIndex() < args.PrevLogIndex {
 		zlog.Debug(rf.logInfo()+"from %d, no found same log, LastLogIndex(%d) < args.PrevLogIndex(%d)",
-			args.LeaderId, lastLogIndex, args.PrevLogIndex)
+			args.LeaderId, rf.getLastLogIndex(), args.PrevLogIndex)
 	} else if rf.getLog(args.PrevLogIndex).Term != args.PrevLogTerm {
 		zlog.Debug(rf.logInfo()+"from %d, no found same log, rf.getLog(%d).Term=%d != args.PrevLogTerm=%d",
 			args.LeaderId, args.PrevLogIndex, rf.getLog(args.PrevLogIndex).Term, args.PrevLogTerm)
@@ -457,7 +454,7 @@ func (rf *Raft) foundSameLog(args *AppendEntriesArgs, reply *AppendEntriesReply)
 		return true
 	}
 
-	index := MinInt(args.PrevLogIndex, lastLogIndex)
+	index := MinInt(args.PrevLogIndex, rf.getLastLogIndex())
 	if rf.getLog(index).Term > args.PrevLogTerm {
 		// 如果term不等，则采用二分查找找到最近匹配的日志索引
 		left, right := rf.commitIndex, index
@@ -486,26 +483,26 @@ func (rf *Raft) foundSameLog(args *AppendEntriesArgs, reply *AppendEntriesReply)
 // 在临界区中
 func (rf *Raft) updateEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	// 截断后面的日志
-	lastLogIndex := rf.getLastLogIndex()
-	if lastLogIndex > args.PrevLogIndex {
+	if rf.getLastLogIndex() > args.PrevLogIndex {
 		zlog.Debug(rf.logInfo()+"truncate log at %d", args.PrevLogIndex+1)
 		rf.truncateAt(args.PrevLogIndex + 1)
 	}
 
 	// 添加日志
 	rf.appendLog(args.Entries...)
+	// FIXME: 日志变动后及时更新最新日志索引，否则bug，修改代码
 
 	// 在log变更时进行持久化
 	rf.persist()
 
 	// 推进commit和apply
 	oldCommitIndex := rf.commitIndex
-	rf.commitIndex = MinInt(args.LeaderCommit, lastLogIndex)
+	rf.commitIndex = MinInt(args.LeaderCommit, rf.getLastLogIndex())
 	rf.applyLogEntries(oldCommitIndex+1, rf.commitIndex)
 	rf.lastApplied = rf.commitIndex
 
 	zlog.Debug(rf.logInfo()+"append %d entries: <%d, %d>, commit: <%d, %d>",
-		len(args.Entries), args.PrevLogIndex, lastLogIndex, oldCommitIndex, rf.commitIndex)
+		len(args.Entries), args.PrevLogIndex, rf.getLastLogIndex(), oldCommitIndex, rf.commitIndex)
 }
 
 func (rf *Raft) applyLogEntries(left, right int) {
@@ -706,8 +703,7 @@ func (rf *Raft) ballotCount(server int, ballot *int, args *RequestVoteArgs, repl
 	// 如果状态已不是candidate，则无法变为leader
 	if atomic.LoadInt32(&rf.state) == Candidate {
 		// 本节点成为 leader
-		zlog.Debug(rf.logInfo()+"state:%s=>leader",
-			rf.stateStr())
+		zlog.Debug(rf.logInfo()+"state:%s=>leader", rf.stateStr())
 		atomic.StoreInt32(&rf.state, Leader)
 		rf.leaderId = rf.me
 		nextIndex := rf.getLastLogIndex() + 1
@@ -786,16 +782,14 @@ func (rf *Raft) heartbeatForOne(server int) {
 		return
 	}
 
-	zlog.Debug(rf.logInfo()+"heartbeat to %d, start",
-		server)
+	zlog.Debug(rf.logInfo()+"heartbeat to %d, start", server)
 
 	reply := &AppendEntriesReply{}
 	before := time.Now()
 	ok := rf.sendAppendEntries(server, args, reply)
 	take := time.Since(before)
 
-	zlog.Debug(rf.logInfo()+"heartbeat to %d, ok=%v, take=%v",
-		server, ok, take)
+	zlog.Debug(rf.logInfo()+"heartbeat to %d, ok=%v, take=%v", server, ok, take)
 
 	if !ok {
 		return
