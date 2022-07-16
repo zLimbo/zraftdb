@@ -419,7 +419,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 		if index <= rf.GetHeadIndex() {
 			return
 		}
-		rf.snapshot = snapshot
+		rf.SetSnapshot(snapshot)
 		rf.TrimLog(index)
 		zlog.Debug(rf.logInfo()+"snapshot, index=%d", index)
 	}()
@@ -705,7 +705,7 @@ func (rf *Raft) ballotCount(server int, ballot *int, args *RequestVoteArgs, repl
 			rf.nextIndex[i] = nextIndex
 			rf.matchIndex[i] = 0
 		}
-		go rf.Start(rf.GetMe())
+		// go rf.Start(rf.GetMe())
 		go rf.timingHeartbeatForAll()
 		go rf.appendEntriesForAll()
 	}
@@ -1025,6 +1025,7 @@ func (rf *Raft) installSnapshotForOne(server int, args *InstallSnapshotArgs, log
 	}
 
 	*commitIndex = args.LastIncludedIndex
+	rf.matchIndex[server] = args.LastIncludedIndex
 	rf.nextIndex[server] = args.LastIncludedIndex + 1
 	*logMatched = true
 }
@@ -1073,7 +1074,12 @@ func (rf *Raft) advanceLeaderCommit() {
 	sort.Ints(indexes)
 	newCommitIndex := indexes[len(indexes)-len(rf.peers)/2]
 	// 相同任期才允许apply，避免被commit日志被覆盖的情况
-	if rf.GetLog(newCommitIndex).Term == rf.GetCurrentTerm() && newCommitIndex > rf.GetCommitIndex() {
+	if newCommitIndex <= rf.GetHeadIndex() {
+		zlog.Debug(rf.logInfo()+"newCommitIndex=%d, indexes=%d", newCommitIndex, indexes)
+	}
+
+	// ! 条件不能颠倒，必须保证 newCommitIndex > commitIndex >= headIndex
+	if newCommitIndex > rf.GetCommitIndex() && rf.GetLog(newCommitIndex).Term == rf.GetCurrentTerm() {
 		// apply
 		zlog.Debug("leader apply log [%d, %d]", rf.GetCommitIndex()+1, newCommitIndex)
 		rf.applyLogEntries(rf.GetCommitIndex()+1, newCommitIndex)
@@ -1277,7 +1283,14 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		}
 	}
 	rf.TrimLog(args.LastIncludedIndex)
-	rf.snapshot = args.Snapshot
+	rf.SetSnapshot(args.Snapshot)
+
+	rf.applyCh <- ApplyMsg{
+		SnapshotValid: true,
+		Snapshot:      args.Snapshot,
+		SnapshotTerm:  args.LastIncludedTerm,
+		SnapshotIndex: args.LastIncludedIndex,
+	}
 }
 
 func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
