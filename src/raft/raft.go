@@ -132,12 +132,12 @@ func (rf *Raft) logInfo() string {
 	if zlog.ZLogLevel >= zlog.InfoLevel {
 		return ""
 	}
-	lastLogIndex := rf.getLastLogIndex()
-	lastLogTerm := rf.getLog(lastLogIndex).Term
+	lastLogIndex := rf.GetLastLogIndex()
+	lastLogTerm := rf.GetLog(lastLogIndex).Term
 	return fmt.Sprintf("<%d,%d,%d>|<%d,%d,%d>|<%d,%d>| ",
 		rf.GetMe(), rf.GetLeaderId(), rf.GetCurrentTerm(),
 		lastLogTerm, lastLogIndex, rf.GetCommitIndex(),
-		rf.GetHeadIndex(), rf.getLastLogIndex()-rf.GetHeadIndex())
+		rf.GetHeadIndex(), rf.GetLastLogIndex()-rf.GetHeadIndex())
 }
 
 // ============================================ FIXME: 核心数据操作，读写锁封装
@@ -214,15 +214,33 @@ func (rf *Raft) GetHeadIndex() int {
 	return rf.headIndex
 }
 
+func (rf *Raft) SetHeadIndex(headIndex int) {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	rf.headIndex = headIndex
+}
+
+func (rf *Raft) GetSnapshot() []byte {
+	rf.rw.RLock()
+	defer rf.rw.RUnlock()
+	return rf.snapshot
+}
+
+func (rf *Raft) SetSnapshot(snapshot []byte) {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	rf.snapshot = snapshot
+}
+
 // ================================== FIXME: 读写日志
 
-func (rf *Raft) getLastLogIndex() int {
+func (rf *Raft) GetLastLogIndex() int {
 	rf.rw.RLock()
 	defer rf.rw.RUnlock()
 	return rf.headIndex + len(rf.log) - 1
 }
 
-func (rf *Raft) getLog(index int) LogEntry {
+func (rf *Raft) GetLog(index int) LogEntry {
 	rf.rw.RLock()
 	defer rf.rw.RUnlock()
 
@@ -260,12 +278,20 @@ func (rf *Raft) appendLog(entries ...LogEntry) {
 	rf.log = append(rf.log, entries...)
 }
 
-func (rf *Raft) snapShotLog(index int) {
+func (rf *Raft) TrimLog(index int) {
 	rf.rw.Lock()
 	defer rf.rw.Unlock()
 	memIndex := index - rf.headIndex
 	rf.log = rf.log[memIndex:]
 	rf.headIndex = index
+}
+
+func (rf *Raft) ClearLog(headIndex, headTerm int) {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	rf.log = []LogEntry{}
+	rf.log = append(rf.log, LogEntry{Term: headTerm})
+	rf.headIndex = headIndex
 }
 
 // ============================================ FIXME: 日志操作，后期封装
@@ -310,7 +336,7 @@ func (rf *Raft) persist() {
 	// rf.mu.Lock()
 	// defer rf.mu.Unlock()
 	zlog.Debug(rf.logInfo()+"persist, votedFor=%d, LastLogIndex=%d",
-		rf.GetVotedFor(), rf.getLastLogIndex())
+		rf.GetVotedFor(), rf.GetLastLogIndex())
 
 	e.Encode(rf.GetCurrentTerm())
 	e.Encode(rf.GetVotedFor())
@@ -362,7 +388,7 @@ func (rf *Raft) readPersist(data []byte) {
 	rf.log = log
 
 	zlog.Debug(rf.logInfo()+"read persist, votedFor=%d, LastLogIndex=%d",
-		rf.GetVotedFor(), rf.getLastLogIndex())
+		rf.GetVotedFor(), rf.GetLastLogIndex())
 }
 
 //
@@ -394,7 +420,7 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 			return
 		}
 		rf.snapshot = snapshot
-		rf.snapShotLog(index)
+		rf.TrimLog(index)
 		zlog.Debug(rf.logInfo()+"snapshot, index=%d", index)
 	}()
 }
@@ -432,8 +458,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	defer rf.mu.Unlock()
 
 	reply.Term = rf.GetCurrentTerm()
-	lastLogIndex := rf.getLastLogIndex()
-	lastLogTerm := rf.getLog(lastLogIndex).Term
+	lastLogIndex := rf.GetLastLogIndex()
+	lastLogTerm := rf.GetLog(lastLogIndex).Term
 
 	// 新的任期重置投票权
 	if rf.GetCurrentTerm() < args.Term {
@@ -491,145 +517,6 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
-type AppendEntriesArgs struct {
-	Term         int // leader’s term
-	LeaderId     int // so follower can redirect clients
-	PrevLogIndex int // index of log entry immediately preceding new ones
-
-	PrevLogTerm int        // term of prevLogIndex entry
-	Entries     []LogEntry // log entries to store (empty for heartbeat; may send more than one for efficiency)
-
-	LeaderCommit int // leader’s commitIndex
-}
-
-type AppendEntriesReply struct {
-	Term     int  // currentTerm, for leader to update itself
-	LogIndex int  // 换主后，为leader快速定位匹配日志
-	Success  bool // success true if follower contained entry matching prevLogIndex and prevLogTerm
-}
-
-func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
-
-	if args.Term < rf.GetCurrentTerm() {
-		reply.Term = rf.GetCurrentTerm()
-		reply.Success = false
-		return
-	}
-
-	atomic.StoreInt32(&rf.state, Follower) // 无论原来状态是什么，状态更新为follower
-	atomic.StoreInt32(&rf.leaderLost, 0)   // 重置超时flag
-	rf.SetCurrentTerm(args.Term)           // 新的Term应该更高
-
-	// 新的leader产生
-	if args.LeaderId != rf.GetLeaderId() {
-		zlog.Debug(rf.logInfo()+"state:%s=>follower, new leader %d",
-			rf.stateStr(), args.LeaderId)
-		rf.SetLeaderId(args.LeaderId)
-	}
-
-	reply.Success = true
-	reply.Term = rf.GetCurrentTerm()
-
-	// leader 的心跳消息，直接返回
-	if args.PrevLogIndex < 0 {
-		zlog.Debug(rf.logInfo()+"heartbeat from %d, reply.Term=%d",
-			args.LeaderId, reply.Term)
-		reply.LogIndex = -100
-		return
-	}
-
-	// 相同日志未直接定位到，需多轮交互
-	if !rf.foundSameLog(args, reply) {
-		return
-	}
-
-	// 对日志进行操作
-	rf.updateEntries(args, reply)
-}
-
-// 在临界区中
-func (rf *Raft) foundSameLog(args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	if rf.getLastLogIndex() < args.PrevLogIndex {
-		zlog.Debug(rf.logInfo()+"from %d, no found same log, LastLogIndex(%d) < args.PrevLogIndex(%d)",
-			args.LeaderId, rf.getLastLogIndex(), args.PrevLogIndex)
-	} else if rf.getLog(args.PrevLogIndex).Term != args.PrevLogTerm {
-		zlog.Debug(rf.logInfo()+"from %d, no found same log, rf.getLog(%d).Term=%d != args.PrevLogTerm=%d",
-			args.LeaderId, args.PrevLogIndex, rf.getLog(args.PrevLogIndex).Term, args.PrevLogTerm)
-	} else {
-		return true
-	}
-
-	index := MinInt(args.PrevLogIndex, rf.getLastLogIndex())
-	if rf.getLog(index).Term > args.PrevLogTerm {
-		// 如果term不等，则采用二分查找找到最近匹配的日志索引
-		left, right := rf.GetCommitIndex(), index
-		for left < right {
-			mid := left + (right-left)/2
-			zlog.Debug(rf.logInfo()+"from %d, no found same log, rf.getLog(%d).Term=%d, args.PrevLogTerm=%d",
-				args.LeaderId, mid, rf.getLog(mid).Term, args.PrevLogTerm)
-			if rf.getLog(mid).Term <= args.PrevLogTerm {
-				left = mid + 1
-			} else {
-				right = mid
-			}
-		}
-		index = left - 1
-	}
-
-	zlog.Debug(rf.logInfo()+"from %d, no found same log, rf.getLog(%d).Term=%d, args.PrevLogTerm=%d",
-		args.LeaderId, index, rf.getLog(index).Term, args.PrevLogTerm)
-
-	reply.Term = rf.getLog(index).Term
-	reply.LogIndex = index
-	reply.Success = false
-	return false
-}
-
-// 在临界区中
-func (rf *Raft) updateEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	// 截断后面的日志
-	if rf.getLastLogIndex() > args.PrevLogIndex {
-		zlog.Debug(rf.logInfo()+"truncate log at %d", args.PrevLogIndex+1)
-		rf.truncateAt(args.PrevLogIndex + 1)
-	}
-
-	// 添加日志
-	rf.appendLog(args.Entries...)
-	// FIXME: 日志变动后及时更新最新日志索引，否则bug，修改代码
-
-	// 在log变更时进行持久化
-	rf.persist()
-
-	// 推进commit和apply
-	oldCommitIndex := rf.GetCommitIndex()
-	rf.SetCommitIndex(MinInt(args.LeaderCommit, rf.getLastLogIndex()))
-	rf.applyLogEntries(oldCommitIndex+1, rf.GetCommitIndex())
-	rf.SetLastApplied(rf.GetCommitIndex())
-
-	zlog.Debug(rf.logInfo()+"append %d entries: <%d, %d>, commit: <%d, %d>",
-		len(args.Entries), args.PrevLogIndex, rf.getLastLogIndex(), oldCommitIndex, rf.GetCommitIndex())
-}
-
-// 在临界区中
-func (rf *Raft) applyLogEntries(left, right int) {
-	for i := left; i <= right; i++ {
-		zlog.Debug(rf.logInfo()+"apply, commandIndex=%d", i)
-		rf.applyCh <- ApplyMsg{
-			CommandValid: true,
-			Command:      rf.getLog(i).Command,
-			CommandIndex: i,
-		}
-	}
-}
-
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
-	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
-	return ok
-}
-
 //
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -661,7 +548,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 			Term:    rf.GetCurrentTerm(),
 			Command: command,
 		})
-		index = rf.getLastLogIndex()
+		index = rf.GetLastLogIndex()
 		zlog.Debug(rf.logInfo()+"new log, term=%d, index=%d", term, index)
 		rf.nextIndex[rf.GetMe()] = index + 1
 		rf.matchIndex[rf.GetMe()] = index
@@ -737,8 +624,8 @@ func (rf *Raft) elect() {
 		rf.SetLeaderId(-1)                         // 无主状态
 		rf.SetVotedFor(rf.GetMe())                 // 竞选获得票数，自己会先给自己投一票，若其他人请求投票会失败
 
-		lastLogIndex := rf.getLastLogIndex()
-		lastLogTerm := rf.getLog(lastLogIndex).Term
+		lastLogIndex := rf.GetLastLogIndex()
+		lastLogTerm := rf.GetLog(lastLogIndex).Term
 		return &RequestVoteArgs{
 			Term:         rf.GetCurrentTerm(),
 			CandidateId:  rf.GetMe(),
@@ -813,7 +700,7 @@ func (rf *Raft) ballotCount(server int, ballot *int, args *RequestVoteArgs, repl
 		zlog.Debug(rf.logInfo()+"state:%s=>leader", rf.stateStr())
 		atomic.StoreInt32(&rf.state, Leader)
 		rf.SetLeaderId(rf.GetMe())
-		nextIndex := rf.getLastLogIndex() + 1
+		nextIndex := rf.GetLastLogIndex() + 1
 		for i := range rf.nextIndex {
 			rf.nextIndex[i] = nextIndex
 			rf.matchIndex[i] = 0
@@ -939,6 +826,50 @@ func (rf *Raft) appendEntriesForAll() {
 	}
 }
 
+func (rf *Raft) getArgs(server int, logMatched bool, nEntries int) (
+	appendEntriesArgs *AppendEntriesArgs, installSnapshotArgs *InstallSnapshotArgs) {
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if rf.killed() || atomic.LoadInt32(&rf.state) != Leader {
+		return
+	}
+
+	startIndex := rf.nextIndex[server]
+
+	// 如果 nextIndex 在快照中，则发送快照
+	if startIndex <= rf.GetHeadIndex() {
+		installSnapshotArgs = &InstallSnapshotArgs{
+			Term:              rf.GetCurrentTerm(),
+			LeaderId:          rf.GetMe(),
+			LastIncludedIndex: rf.GetHeadIndex(),
+			LastIncludedTerm:  rf.GetLog(rf.GetHeadIndex()).Term,
+			Snapshot:          rf.GetSnapshot(),
+		}
+		return
+	}
+
+	if logMatched {
+		// 指数递增拷贝
+		// nEntriesCopy = MinInt(nEntriesCopy*nEntriesCopy+1, rf.getLastLogIndex() + 1-startIndex)
+		// 全部取出拷贝
+		nEntries = rf.GetLastLogIndex() + 1 - startIndex
+	} else {
+		nEntries = MinInt(1, rf.GetLastLogIndex()+1-startIndex)
+	}
+
+	appendEntriesArgs = &AppendEntriesArgs{
+		Term:         rf.GetCurrentTerm(),
+		LeaderId:     rf.GetMe(),
+		PrevLogIndex: startIndex - 1,
+		PrevLogTerm:  rf.GetLog(startIndex - 1).Term,
+		Entries:      rf.getLogs(startIndex, startIndex+nEntries),
+		LeaderCommit: rf.GetCommitIndex(),
+	}
+	return
+}
+
 func (rf *Raft) timingAppendEntriesForOne(server int) {
 	zlog.Debug(rf.logInfo()+"timingAppendEntriesForOne, server=%d",
 		server)
@@ -957,7 +888,7 @@ func (rf *Raft) timingAppendEntriesForOne(server int) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 				// 有新的日志需要同步或有更新的commitIndex
-				return rf.getLastLogIndex() >= rf.nextIndex[server] || commitIndex != rf.GetCommitIndex()
+				return rf.GetLastLogIndex() >= rf.nextIndex[server] || commitIndex != rf.GetCommitIndex()
 			}()
 			if needSend {
 				break
@@ -965,122 +896,147 @@ func (rf *Raft) timingAppendEntriesForOne(server int) {
 			time.Sleep(intervalTime * time.Millisecond)
 		}
 
-		// go rf.heartbeatForOne(server)
+		appendEntriesArgs, installSnapshotArgs := rf.getArgs(server, logMatched, nEntriesCopy)
 
-		args, stop := func() (*AppendEntriesArgs, bool) {
-			rf.mu.Lock()
-			defer rf.mu.Unlock()
-
-			if rf.killed() || atomic.LoadInt32(&rf.state) != Leader {
-				return nil, true
-			}
-
-			startIndex := rf.nextIndex[server]
-			if logMatched {
-				// 指数递增拷贝
-				// nEntriesCopy = MinInt(nEntriesCopy*nEntriesCopy+1, rf.getLastLogIndex() + 1-startIndex)
-				// 全部取出拷贝
-				nEntriesCopy = rf.getLastLogIndex() + 1 - startIndex
-			} else {
-				nEntriesCopy = MinInt(1, rf.getLastLogIndex()+1-startIndex)
-			}
-
-			return &AppendEntriesArgs{
-				Term:         rf.GetCurrentTerm(),
-				LeaderId:     rf.GetMe(),
-				PrevLogIndex: startIndex - 1,
-				PrevLogTerm:  rf.getLog(startIndex - 1).Term,
-				Entries:      rf.getLogs(startIndex, startIndex+nEntriesCopy),
-				LeaderCommit: rf.GetCommitIndex(),
-			}, false
-		}()
-
-		if stop {
+		if appendEntriesArgs != nil {
+			rf.appendEntriesForOne(server, appendEntriesArgs, &logMatched, &commitIndex)
+			nEntriesCopy = len(appendEntriesArgs.Entries)
+		} else if installSnapshotArgs != nil {
+			rf.installSnapshotForOne(server, installSnapshotArgs, &logMatched, &commitIndex)
+		} else {
+			// rf.killed() || atomic.LoadInt32(&rf.state) != Leader
 			return
 		}
-
-		zlog.Debug(rf.logInfo()+"append entries to %d, entries=(%d, %d], PrevLogIndex=%d, PrevLogTerm=%d, LeaderCommit=%d",
-			server, args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.PrevLogIndex, args.PrevLogTerm, args.LeaderCommit)
-
-		reply := &AppendEntriesReply{}
-		before := time.Now()
-		ok := rf.sendAppendEntries(server, args, reply)
-		take := time.Since(before)
-
-		zlog.Debug(rf.logInfo()+"append entries to %d, ok=%v, take=%v", server, ok, take)
-
-		// 发送失败立刻重发
-		if !ok {
-			// logMatched = false
-			continue
-		}
-
-		func() {
-			rf.mu.Lock()
-			defer rf.mu.Unlock()
-
-			if rf.killed() || atomic.LoadInt32(&rf.state) != Leader {
-				return
-			}
-
-			// 超时后过期的回复消息
-			if args.Term < rf.GetCurrentTerm() {
-				zlog.Debug(rf.logInfo()+"append entries to %d, ok but expire, args.Term=%d, rf.getCurrentTerm()=%d, take=%v",
-					server, args.Term, rf.GetCurrentTerm(), take)
-				return
-			}
-
-			// 保持连接置位
-			atomic.StoreInt32(&rf.peerConnBmap, atomic.LoadInt32(&rf.peerConnBmap)|(1<<server))
-
-			// 遇到更高任期，成为follower
-			if rf.GetCurrentTerm() < reply.Term {
-				zlog.Debug(rf.logInfo()+"append entries to %d, higher term, state:%s=>follower",
-					server, rf.stateStr())
-				rf.SetCurrentTerm(reply.Term)
-				atomic.StoreInt32(&rf.state, Follower)
-				rf.SetLeaderId(-1)
-				return
-			}
-
-			// 如果不成功，说明PrevLogIndex不匹配
-			if !reply.Success {
-
-				zlog.Debug(rf.logInfo()+"append entries to %d, no match, PrevLogIndex=%d, PrevLogTerm=%d, reply.LogIndex=%d, reply.term=%d",
-					server, args.PrevLogIndex, args.PrevLogTerm, reply.LogIndex, reply.Term)
-
-				logMatched = rf.matchNextIndex(server, args.PrevLogIndex, args.PrevLogTerm, reply.LogIndex, reply.Term)
-				return
-			}
-
-			if len(args.Entries) != 0 {
-				// 复制到副本成功
-				rf.matchIndex[server] = MaxInt(rf.matchIndex[server], args.PrevLogIndex+len(args.Entries))
-				rf.nextIndex[server] = rf.matchIndex[server] + 1
-			}
-
-			zlog.Debug(rf.logInfo()+"append entries to %d, match ok, copy entries=(%d, %d], match.index=%d, next.index=%d",
-				server, args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), rf.matchIndex[server], rf.nextIndex[server])
-
-			// 本server commitIndex的值
-			commitIndex = MinInt(args.LeaderCommit, rf.matchIndex[server])
-
-			// 推进leader的commit
-			rf.advanceLeaderCommit()
-			// follower和leader日志匹配成功，可以发送后续日志
-			logMatched = true
-		}()
 	}
+}
+
+func (rf *Raft) appendEntriesForOne(server int, args *AppendEntriesArgs, logMatched *bool, commitIndex *int) {
+	zlog.Debug(rf.logInfo()+"append entries to %d, entries=(%d, %d], PrevLogIndex=%d, PrevLogTerm=%d, LeaderCommit=%d",
+		server, args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.PrevLogIndex, args.PrevLogTerm, args.LeaderCommit)
+
+	reply := &AppendEntriesReply{}
+	before := time.Now()
+	ok := rf.sendAppendEntries(server, args, reply)
+	take := time.Since(before)
+
+	zlog.Debug(rf.logInfo()+"append entries to %d, ok=%v, take=%v", server, ok, take)
+
+	// 发送失败立刻重发
+	if !ok {
+		// logMatched = false
+		return
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if rf.killed() || atomic.LoadInt32(&rf.state) != Leader {
+		return
+	}
+
+	// 超时后过期的回复消息
+	if args.Term < rf.GetCurrentTerm() {
+		zlog.Debug(rf.logInfo()+"append entries to %d, ok but expire, args.Term=%d, rf.getCurrentTerm()=%d, take=%v",
+			server, args.Term, rf.GetCurrentTerm(), take)
+		return
+	}
+
+	// 保持连接置位
+	atomic.StoreInt32(&rf.peerConnBmap, atomic.LoadInt32(&rf.peerConnBmap)|(1<<server))
+
+	// 遇到更高任期，成为follower
+	if rf.GetCurrentTerm() < reply.Term {
+		zlog.Debug(rf.logInfo()+"append entries to %d, higher term, state:%s=>follower",
+			server, rf.stateStr())
+		rf.SetCurrentTerm(reply.Term)
+		atomic.StoreInt32(&rf.state, Follower)
+		rf.SetLeaderId(-1)
+		return
+	}
+
+	// 如果不成功，说明PrevLogIndex不匹配
+	if !reply.Success {
+
+		zlog.Debug(rf.logInfo()+"append entries to %d, no match, PrevLogIndex=%d, PrevLogTerm=%d, reply.LogIndex=%d, reply.term=%d",
+			server, args.PrevLogIndex, args.PrevLogTerm, reply.LogIndex, reply.Term)
+
+		*logMatched = rf.matchNextIndex(server, args.PrevLogIndex, args.PrevLogTerm, reply.LogIndex, reply.Term)
+		return
+	}
+
+	if len(args.Entries) != 0 {
+		// 复制到副本成功
+		rf.matchIndex[server] = MaxInt(rf.matchIndex[server], args.PrevLogIndex+len(args.Entries))
+		rf.nextIndex[server] = rf.matchIndex[server] + 1
+	}
+
+	zlog.Debug(rf.logInfo()+"append entries to %d, match ok, copy entries=(%d, %d], match.index=%d, next.index=%d",
+		server, args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), rf.matchIndex[server], rf.nextIndex[server])
+
+	// 本server commitIndex的值
+	*commitIndex = MinInt(args.LeaderCommit, rf.matchIndex[server])
+
+	// 推进leader的commit
+	rf.advanceLeaderCommit()
+	// follower和leader日志匹配成功，可以发送后续日志
+	*logMatched = true
+}
+
+func (rf *Raft) installSnapshotForOne(server int, args *InstallSnapshotArgs, logMatched *bool, commitIndex *int) {
+	zlog.Debug(rf.logInfo()+"install snapshot for %d, LastIncludedIndex=%d, LastIncludedTerm=%d",
+		server, args.LastIncludedIndex, args.LastIncludedTerm)
+
+	reply := &InstallSnapshotReply{}
+	before := time.Now()
+	ok := rf.sendInstallSnapshot(server, args, reply)
+	take := time.Since(before)
+
+	zlog.Debug(rf.logInfo()+"install snapshot for %d, ok=%v, take=%v", server, ok, take)
+
+	if !ok {
+		return
+	}
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if rf.killed() || atomic.LoadInt32(&rf.state) != Leader {
+		return
+	}
+
+	// 超时后过期的回复消息
+	if args.Term < rf.GetCurrentTerm() {
+		zlog.Debug(rf.logInfo()+"append entries to %d, ok but expire, args.Term=%d, rf.getCurrentTerm()=%d, take=%v",
+			server, args.Term, rf.GetCurrentTerm(), take)
+		return
+	}
+
+	// 保持连接置位
+	atomic.StoreInt32(&rf.peerConnBmap, atomic.LoadInt32(&rf.peerConnBmap)|(1<<server))
+
+	// 遇到更高任期，成为follower
+	if rf.GetCurrentTerm() < reply.Term {
+		zlog.Debug(rf.logInfo()+"append entries to %d, higher term, state:%s=>follower",
+			server, rf.stateStr())
+		rf.SetCurrentTerm(reply.Term)
+		atomic.StoreInt32(&rf.state, Follower)
+		rf.SetLeaderId(-1)
+		return
+	}
+
+	*commitIndex = args.LastIncludedIndex
+	rf.nextIndex[server] = args.LastIncludedIndex + 1
+	*logMatched = true
 }
 
 // 在互斥区中
 func (rf *Raft) matchNextIndex(server, prevLogIndex, prevLogTerm, replyLogIndex, replyLogTerm int) bool {
 
-	if rf.getLog(replyLogIndex).Term == replyLogTerm {
+	if rf.GetLog(replyLogIndex).Term == replyLogTerm {
 		// 刚好匹配，从下一个开始
 		rf.nextIndex[server] = replyLogIndex + 1
 		return true
-	} else if rf.getLog(replyLogIndex).Term < replyLogTerm {
+	} else if rf.GetLog(replyLogIndex).Term < replyLogTerm {
 		// 从前面试起
 		rf.nextIndex[server] = replyLogIndex
 		return false
@@ -1090,15 +1046,15 @@ func (rf *Raft) matchNextIndex(server, prevLogIndex, prevLogTerm, replyLogIndex,
 	for left < right {
 		mid := left + (right-left)/2
 		zlog.Debug(rf.logInfo()+"append entries to %d, for match, rf.getLog(%d).Term=%d, reply.Term=%d",
-			server, mid, rf.getLog(mid).Term, replyLogTerm)
-		if rf.getLog(mid).Term <= replyLogTerm {
+			server, mid, rf.GetLog(mid).Term, replyLogTerm)
+		if rf.GetLog(mid).Term <= replyLogTerm {
 			left = mid + 1
 		} else {
 			right = mid
 		}
 	}
 	zlog.Debug(rf.logInfo()+"append entries to %d, for match, rf.getLog(%d).Term=%d, reply.Term=%d",
-		server, left, rf.getLog(left).Term, replyLogTerm)
+		server, left, rf.GetLog(left).Term, replyLogTerm)
 
 	// 最近位置索引大一 (left - 1) + 1
 	rf.nextIndex[server] = left
@@ -1117,12 +1073,216 @@ func (rf *Raft) advanceLeaderCommit() {
 	sort.Ints(indexes)
 	newCommitIndex := indexes[len(indexes)-len(rf.peers)/2]
 	// 相同任期才允许apply，避免被commit日志被覆盖的情况
-	if rf.getLog(newCommitIndex).Term == rf.GetCurrentTerm() && newCommitIndex > rf.GetCommitIndex() {
+	if rf.GetLog(newCommitIndex).Term == rf.GetCurrentTerm() && newCommitIndex > rf.GetCommitIndex() {
 		// apply
 		zlog.Debug("leader apply log [%d, %d]", rf.GetCommitIndex()+1, newCommitIndex)
 		rf.applyLogEntries(rf.GetCommitIndex()+1, newCommitIndex)
 		rf.SetCommitIndex(newCommitIndex)
 	}
+}
+
+type AppendEntriesArgs struct {
+	Term         int // leader’s term
+	LeaderId     int // so follower can redirect clients
+	PrevLogIndex int // index of log entry immediately preceding new ones
+
+	PrevLogTerm int        // term of prevLogIndex entry
+	Entries     []LogEntry // log entries to store (empty for heartbeat; may send more than one for efficiency)
+
+	LeaderCommit int // leader’s commitIndex
+}
+
+type AppendEntriesReply struct {
+	Term     int  // currentTerm, for leader to update itself
+	LogIndex int  // 换主后，为leader快速定位匹配日志
+	Success  bool // success true if follower contained entry matching prevLogIndex and prevLogTerm
+}
+
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if args.Term < rf.GetCurrentTerm() {
+		reply.Term = rf.GetCurrentTerm()
+		reply.Success = false
+		return
+	}
+
+	atomic.StoreInt32(&rf.state, Follower) // 无论原来状态是什么，状态更新为follower
+	atomic.StoreInt32(&rf.leaderLost, 0)   // 重置超时flag
+	rf.SetCurrentTerm(args.Term)           // 新的Term应该更高
+
+	// 新的leader产生
+	if args.LeaderId != rf.GetLeaderId() {
+		zlog.Debug(rf.logInfo()+"state:%s=>follower, new leader %d",
+			rf.stateStr(), args.LeaderId)
+		rf.SetLeaderId(args.LeaderId)
+	}
+
+	reply.Success = true
+	reply.Term = rf.GetCurrentTerm()
+
+	// leader 的心跳消息，直接返回
+	if args.PrevLogIndex < 0 {
+		zlog.Debug(rf.logInfo()+"heartbeat from %d, reply.Term=%d",
+			args.LeaderId, reply.Term)
+		reply.LogIndex = -100
+		return
+	}
+
+	// 相同日志未直接定位到，需多轮交互
+	if !rf.foundSameLog(args, reply) {
+		return
+	}
+
+	// 对日志进行操作
+	rf.updateEntries(args, reply)
+}
+
+// 在临界区中
+func (rf *Raft) foundSameLog(args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	if rf.GetLastLogIndex() < args.PrevLogIndex {
+		zlog.Debug(rf.logInfo()+"from %d, no found same log, LastLogIndex(%d) < args.PrevLogIndex(%d)",
+			args.LeaderId, rf.GetLastLogIndex(), args.PrevLogIndex)
+	} else if rf.GetLog(args.PrevLogIndex).Term != args.PrevLogTerm {
+		zlog.Debug(rf.logInfo()+"from %d, no found same log, rf.getLog(%d).Term=%d != args.PrevLogTerm=%d",
+			args.LeaderId, args.PrevLogIndex, rf.GetLog(args.PrevLogIndex).Term, args.PrevLogTerm)
+	} else {
+		return true
+	}
+
+	index := MinInt(args.PrevLogIndex, rf.GetLastLogIndex())
+	if rf.GetLog(index).Term > args.PrevLogTerm {
+		// 如果term不等，则采用二分查找找到最近匹配的日志索引
+		left, right := rf.GetCommitIndex(), index
+		for left < right {
+			mid := left + (right-left)/2
+			zlog.Debug(rf.logInfo()+"from %d, no found same log, rf.getLog(%d).Term=%d, args.PrevLogTerm=%d",
+				args.LeaderId, mid, rf.GetLog(mid).Term, args.PrevLogTerm)
+			if rf.GetLog(mid).Term <= args.PrevLogTerm {
+				left = mid + 1
+			} else {
+				right = mid
+			}
+		}
+		index = left - 1
+	}
+
+	zlog.Debug(rf.logInfo()+"from %d, no found same log, rf.getLog(%d).Term=%d, args.PrevLogTerm=%d",
+		args.LeaderId, index, rf.GetLog(index).Term, args.PrevLogTerm)
+
+	reply.Term = rf.GetLog(index).Term
+	reply.LogIndex = index
+	reply.Success = false
+	return false
+}
+
+// 在临界区中
+func (rf *Raft) updateEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	// 截断后面的日志
+	if rf.GetLastLogIndex() > args.PrevLogIndex {
+		zlog.Debug(rf.logInfo()+"truncate log at %d", args.PrevLogIndex+1)
+		rf.truncateAt(args.PrevLogIndex + 1)
+	}
+
+	// 添加日志
+	rf.appendLog(args.Entries...)
+	// FIXME: 日志变动后及时更新最新日志索引，否则bug，修改代码
+
+	// 在log变更时进行持久化
+	rf.persist()
+
+	// 推进commit和apply
+	oldCommitIndex := rf.GetCommitIndex()
+	rf.SetCommitIndex(MinInt(args.LeaderCommit, rf.GetLastLogIndex()))
+	rf.applyLogEntries(oldCommitIndex+1, rf.GetCommitIndex())
+	rf.SetLastApplied(rf.GetCommitIndex())
+
+	zlog.Debug(rf.logInfo()+"append %d entries: <%d, %d>, commit: <%d, %d>",
+		len(args.Entries), args.PrevLogIndex, rf.GetLastLogIndex(), oldCommitIndex, rf.GetCommitIndex())
+}
+
+// 在临界区中
+func (rf *Raft) applyLogEntries(left, right int) {
+	for i := left; i <= right; i++ {
+		zlog.Debug(rf.logInfo()+"apply, commandIndex=%d", i)
+		rf.applyCh <- ApplyMsg{
+			CommandValid: true,
+			Command:      rf.GetLog(i).Command,
+			CommandIndex: i,
+		}
+	}
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	return ok
+}
+
+type InstallSnapshotArgs struct {
+	Term              int    // leader’s term
+	LeaderId          int    // so follower can redirect clients
+	LastIncludedIndex int    // the snapshot replaces all entries up through and including this index
+	LastIncludedTerm  int    // term of lastIncludedIndex
+	Snapshot          []byte // 这里一次性发送过去
+	// Offset            int    // byte offset where chunk is positioned in the snapshot file
+	// Data              []byte // raw bytes of the snapshot chunk, starting at offset
+	// Done              bool   // true if this is the last chunk
+}
+
+type InstallSnapshotReply struct {
+	Term int // currentTerm, for leader to update itself
+}
+
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	reply.Term = rf.GetCurrentTerm()
+	if args.Term < rf.GetCurrentTerm() {
+		return
+	}
+
+	atomic.StoreInt32(&rf.state, Follower) // 无论原来状态是什么，状态更新为follower
+	atomic.StoreInt32(&rf.leaderLost, 0)   // 重置超时flag
+	rf.SetCurrentTerm(args.Term)           // 新的Term应该更高
+
+	// 新的leader产生
+	if args.LeaderId != rf.GetLeaderId() {
+		zlog.Debug(rf.logInfo()+"state:%s=>follower, new leader %d",
+			rf.stateStr(), args.LeaderId)
+		rf.SetLeaderId(args.LeaderId)
+	}
+
+	// 快照可能因为网络延时而过期，丢弃
+	if args.LastIncludedIndex <= rf.GetHeadIndex() {
+		return
+	}
+
+	// FIXME: 这里预设 commitIndex 前的日志一定是一致相同的，其后才会出现日志不匹配情况
+	// headIndex <= lastApplied <= commitIndex <= lastLogIndex
+	//     ---- args.LastIncludedIndex ----
+	if rf.GetLastApplied() < args.LastIncludedIndex {
+		rf.SetLastApplied(args.LastIncludedIndex)
+		if rf.GetCommitIndex() < args.LastIncludedIndex {
+			rf.SetCommitIndex(args.LastIncludedIndex)
+			// 快照完全超过当前节点的日志，或日志不匹配，则清除整个日志
+			// 否则后续日志相同，保留
+			if rf.GetLastLogIndex() < args.LastIncludedIndex ||
+				rf.GetLog(args.LastIncludedIndex).Term != args.LastIncludedTerm {
+				// 清除整个日志，同时设置 headIndex 和 headTerm
+				rf.ClearLog(args.LastIncludedIndex, args.LastIncludedTerm)
+			}
+		}
+	}
+	rf.TrimLog(args.LastIncludedIndex)
+	rf.snapshot = args.Snapshot
+}
+
+func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
+	return ok
 }
 
 //
