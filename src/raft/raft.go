@@ -82,6 +82,7 @@ const (
 	electionTimeoutFrom  = 600
 	electionTimeoutRange = 200
 	leaderTimeout        = 2000
+	retryRpc             = 500
 )
 
 func GetRandomElapsedTime() int {
@@ -826,7 +827,7 @@ func (rf *Raft) appendEntriesForAll() {
 	}
 }
 
-func (rf *Raft) getArgs(server int, logMatched bool, nEntries int) (
+func (rf *Raft) getArgs(server int, logMatched bool, nEntriesCopy int) (
 	appendEntriesArgs *AppendEntriesArgs, installSnapshotArgs *InstallSnapshotArgs) {
 
 	rf.mu.Lock()
@@ -854,9 +855,9 @@ func (rf *Raft) getArgs(server int, logMatched bool, nEntries int) (
 		// 指数递增拷贝
 		// nEntriesCopy = MinInt(nEntriesCopy*nEntriesCopy+1, rf.getLastLogIndex() + 1-startIndex)
 		// 全部取出拷贝
-		nEntries = rf.GetLastLogIndex() + 1 - startIndex
+		nEntriesCopy = rf.GetLastLogIndex() + 1 - startIndex
 	} else {
-		nEntries = MinInt(1, rf.GetLastLogIndex()+1-startIndex)
+		nEntriesCopy = MinInt(1, rf.GetLastLogIndex()+1-startIndex)
 	}
 
 	appendEntriesArgs = &AppendEntriesArgs{
@@ -864,7 +865,7 @@ func (rf *Raft) getArgs(server int, logMatched bool, nEntries int) (
 		LeaderId:     rf.GetMe(),
 		PrevLogIndex: startIndex - 1,
 		PrevLogTerm:  rf.GetLog(startIndex - 1).Term,
-		Entries:      rf.getLogs(startIndex, startIndex+nEntries),
+		Entries:      rf.getLogs(startIndex, startIndex+nEntriesCopy),
 		LeaderCommit: rf.GetCommitIndex(),
 	}
 	return
@@ -911,21 +912,36 @@ func (rf *Raft) timingAppendEntriesForOne(server int) {
 }
 
 func (rf *Raft) appendEntriesForOne(server int, args *AppendEntriesArgs, logMatched *bool, commitIndex *int) {
-	zlog.Debug(rf.logInfo()+"append entries to %d, entries=(%d, %d], PrevLogIndex=%d, PrevLogTerm=%d, LeaderCommit=%d",
-		server, args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.PrevLogIndex, args.PrevLogTerm, args.LeaderCommit)
 
-	reply := &AppendEntriesReply{}
+	replyCh := make(chan *AppendEntriesReply)
 	before := time.Now()
-	ok := rf.sendAppendEntries(server, args, reply)
+	go func() {
+		received := int32(0)
+		count := int32(0)
+		for {
+			if atomic.LoadInt32(&received) == 1 {
+				return
+			}
+			go func() {
+				zlog.Debug(rf.logInfo()+"append entries to %d, entries=(%d, %d], PrevLogIndex=%d, PrevLogTerm=%d, LeaderCommit=%d, sendCount=%d",
+					server, args.PrevLogIndex, args.PrevLogIndex+len(args.Entries), args.PrevLogIndex, args.PrevLogTerm, args.LeaderCommit, atomic.LoadInt32(&count))
+				atomic.AddInt32(&count, 1)
+				reply := &AppendEntriesReply{}
+				ok := rf.sendAppendEntries(server, args, reply)
+				// 原子操作，保证只有一个 reply 进入 通道
+				if ok && atomic.SwapInt32(&received, 1) == 0 {
+					replyCh <- reply
+				}
+			}()
+			// 每隔 retryRpc 进行重发，直至取消
+			time.Sleep(retryRpc * time.Millisecond)
+		}
+	}()
+
+	// 等待第一个返回的 rpc，其他的舍弃
+	reply := <-replyCh
 	take := time.Since(before)
-
-	zlog.Debug(rf.logInfo()+"append entries to %d, ok=%v, take=%v", server, ok, take)
-
-	// 发送失败立刻重发
-	if !ok {
-		// logMatched = false
-		return
-	}
+	zlog.Debug(rf.logInfo()+"append entries to %d ok, take=%v", server, take)
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -983,19 +999,36 @@ func (rf *Raft) appendEntriesForOne(server int, args *AppendEntriesArgs, logMatc
 }
 
 func (rf *Raft) installSnapshotForOne(server int, args *InstallSnapshotArgs, logMatched *bool, commitIndex *int) {
-	zlog.Debug(rf.logInfo()+"install snapshot for %d, LastIncludedIndex=%d, LastIncludedTerm=%d",
-		server, args.LastIncludedIndex, args.LastIncludedTerm)
 
-	reply := &InstallSnapshotReply{}
+	replyCh := make(chan *InstallSnapshotReply)
 	before := time.Now()
-	ok := rf.sendInstallSnapshot(server, args, reply)
+	go func() {
+		received := int32(0)
+		count := int32(0)
+		for {
+			if atomic.LoadInt32(&received) == 1 {
+				return
+			}
+			go func() {
+				zlog.Debug(rf.logInfo()+"install snapshot for %d, LastIncludedIndex=%d, LastIncludedTerm=%d, sendCount=%d",
+					server, args.LastIncludedIndex, args.LastIncludedTerm, atomic.LoadInt32(&count))
+				atomic.AddInt32(&count, 1)
+				reply := &InstallSnapshotReply{}
+				ok := rf.sendInstallSnapshot(server, args, reply)
+				// 原子操作，保证只有一个 reply 进入 通道
+				if ok && atomic.SwapInt32(&received, 1) == 0 {
+					replyCh <- reply
+				}
+			}()
+			// 每隔 retryRpc 进行重发，直至取消
+			time.Sleep(retryRpc * time.Millisecond)
+		}
+	}()
+
+	// 等待第一个返回的 rpc，其他的舍弃
+	reply := <-replyCh
 	take := time.Since(before)
-
-	zlog.Debug(rf.logInfo()+"install snapshot for %d, ok=%v, take=%v", server, ok, take)
-
-	if !ok {
-		return
-	}
+	zlog.Debug(rf.logInfo()+"install snapshot for %d ok, take=%v", server, take)
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
@@ -1193,8 +1226,15 @@ func (rf *Raft) foundSameLog(args *AppendEntriesArgs, reply *AppendEntriesReply)
 
 // 在临界区中
 func (rf *Raft) updateEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	// 截断后面的日志
+
 	if rf.GetLastLogIndex() > args.PrevLogIndex {
+
+		// 后续日志已经匹配，过期的消息, len(args.Entries) > 0 通常是 true
+		// 在接受方保证幂等性
+		if len(args.Entries) > 0 && rf.GetLog(args.PrevLogIndex+1).Term == args.Entries[0].Term {
+			return
+		}
+		// 截断后面的日志
 		zlog.Debug(rf.logInfo()+"truncate log at %d", args.PrevLogIndex+1)
 		rf.truncateAt(args.PrevLogIndex + 1)
 	}
@@ -1269,6 +1309,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	}
 
 	// 快照可能因为网络延时而过期，丢弃
+	// 确保幂等性，相同的快照不会安装两次
 	if args.LastIncludedIndex <= rf.GetHeadIndex() {
 		return
 	}
