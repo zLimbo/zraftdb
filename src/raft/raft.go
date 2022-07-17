@@ -78,7 +78,7 @@ var state2str = map[State]string{
 
 const (
 	intervalTime         = 20
-	heartbeatTime        = 120
+	heartbeatTime        = 200
 	electionTimeoutFrom  = 600
 	electionTimeoutRange = 200
 	leaderTimeout        = 2000
@@ -246,7 +246,7 @@ func (rf *Raft) GetLog(index int) LogEntry {
 
 	memIndex := index - rf.headIndex
 	if memIndex < 0 {
-		zlog.Debug("index=%d, headIndex=%d, memIndex=%d", index, rf.headIndex, memIndex)
+		zlog.Warn("index=%d, headIndex=%d, memIndex=%d", index, rf.headIndex, memIndex)
 	}
 	return rf.log[memIndex]
 }
@@ -1033,17 +1033,19 @@ func (rf *Raft) installSnapshotForOne(server int, args *InstallSnapshotArgs, log
 // 在互斥区中
 func (rf *Raft) matchNextIndex(server, prevLogIndex, prevLogTerm, replyLogIndex, replyLogTerm int) bool {
 
-	if rf.GetLog(replyLogIndex).Term == replyLogTerm {
-		// 刚好匹配，从下一个开始
-		rf.nextIndex[server] = replyLogIndex + 1
-		return true
-	} else if rf.GetLog(replyLogIndex).Term < replyLogTerm {
+	// ! 先判断是否在 headIndex 前
+	if replyLogIndex < rf.GetHeadIndex() || rf.GetLog(replyLogIndex).Term < replyLogTerm {
 		// 从前面试起
 		rf.nextIndex[server] = replyLogIndex
 		return false
 	}
-	// 二分优化快速查找
-	left, right := rf.matchIndex[server], replyLogIndex
+	if rf.GetLog(replyLogIndex).Term == replyLogTerm {
+		// 刚好匹配，从下一个开始
+		rf.nextIndex[server] = replyLogIndex + 1
+		return true
+	}
+	// ! 二分优化快速查找, 注意索引
+	left, right := MaxInt(rf.GetHeadIndex(), rf.matchIndex[server]), replyLogIndex
 	for left < right {
 		mid := left + (right-left)/2
 		zlog.Debug(rf.logInfo()+"append entries to %d, for match, rf.getLog(%d).Term=%d, reply.Term=%d",
@@ -1081,7 +1083,7 @@ func (rf *Raft) advanceLeaderCommit() {
 	// ! 条件不能颠倒，必须保证 newCommitIndex > commitIndex >= headIndex
 	if newCommitIndex > rf.GetCommitIndex() && rf.GetLog(newCommitIndex).Term == rf.GetCurrentTerm() {
 		// apply
-		zlog.Debug("leader apply log [%d, %d]", rf.GetCommitIndex()+1, newCommitIndex)
+		zlog.Debug(rf.logInfo()+"leader apply log [%d, %d]", rf.GetCommitIndex()+1, newCommitIndex)
 		rf.applyLogEntries(rf.GetCommitIndex()+1, newCommitIndex)
 		rf.SetCommitIndex(newCommitIndex)
 	}
@@ -1134,6 +1136,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		zlog.Debug(rf.logInfo()+"heartbeat from %d, reply.Term=%d",
 			args.LeaderId, reply.Term)
 		reply.LogIndex = -100
+		return
+	}
+
+	// 可能因超时而过期的消息，舍弃
+	if args.PrevLogIndex < rf.GetHeadIndex() || args.PrevLogIndex < rf.GetCommitIndex() {
 		return
 	}
 

@@ -12,3 +12,4 @@ mrtmp.*
 /main/mrworker
 
 *.log
+2*.txt
