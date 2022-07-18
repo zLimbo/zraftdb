@@ -252,28 +252,28 @@ func (rf *Raft) GetLog(index int) LogEntry {
 	return rf.log[memIndex]
 }
 
-func (rf *Raft) getLogs(left, right int) []LogEntry {
+func (rf *Raft) GetLogs(left, right int) []LogEntry {
 	rf.rw.RLock()
 	defer rf.rw.RUnlock()
 	memLeft, memRight := left-rf.headIndex, right-rf.headIndex
 	return rf.log[memLeft:memRight]
 }
 
-func (rf *Raft) getAllLog() []LogEntry {
+func (rf *Raft) GetAllLog() []LogEntry {
 	rf.rw.RLock()
 	defer rf.rw.RUnlock()
 	return rf.log
 }
 
 // >= index 的日志都舍弃
-func (rf *Raft) truncateAt(index int) {
+func (rf *Raft) TruncateAt(index int) {
 	rf.rw.Lock()
 	defer rf.rw.Unlock()
 	memIndex := index - rf.headIndex
 	rf.log = rf.log[:memIndex]
 }
 
-func (rf *Raft) appendLog(entries ...LogEntry) {
+func (rf *Raft) AppendLog(entries ...LogEntry) {
 	rf.rw.Lock()
 	defer rf.rw.Unlock()
 	rf.log = append(rf.log, entries...)
@@ -293,6 +293,12 @@ func (rf *Raft) ClearLog(headIndex, headTerm int) {
 	rf.log = []LogEntry{}
 	rf.log = append(rf.log, LogEntry{Term: headTerm})
 	rf.headIndex = headIndex
+}
+
+func (rf *Raft) SetLog(log []LogEntry) {
+	rf.rw.Lock()
+	defer rf.rw.Unlock()
+	rf.log = log
 }
 
 // ============================================ FIXME: 日志操作，后期封装
@@ -341,9 +347,11 @@ func (rf *Raft) persist() {
 
 	e.Encode(rf.GetCurrentTerm())
 	e.Encode(rf.GetVotedFor())
-	// e.Encode(rf.getCommitIndex())
-	// e.Encode(rf.lastApplied)
-	e.Encode(rf.getAllLog())
+	e.Encode(rf.GetCommitIndex())
+	e.Encode(rf.GetHeadIndex())
+	e.Encode(rf.GetAllLog())
+	e.Encode(rf.GetSnapshot())
+
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 }
@@ -371,25 +379,38 @@ func (rf *Raft) readPersist(data []byte) {
 
 	var currentTerm int
 	var votedFor int
+	var commitIndex int
+	var headIndex int
 	var log []LogEntry
+	var snapshot []byte
 
 	r := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(r)
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil ||
-		d.Decode(&log) != nil {
+		d.Decode(&commitIndex) != nil ||
+		d.Decode(&headIndex) != nil ||
+		d.Decode(&log) != nil ||
+		d.Decode(&snapshot) != nil {
 		zlog.Error(rf.logInfo()+"read persist error.", rf.GetMe(), rf.GetCurrentTerm(), rf.GetLeaderId())
 	}
 
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
+	zlog.Debug(rf.logInfo() + "read persist before")
+
 	rf.SetCurrentTerm(currentTerm)
 	rf.SetVotedFor(votedFor)
-	rf.log = log
+	rf.SetCommitIndex(commitIndex)
+	rf.SetHeadIndex(headIndex)
+	rf.SetLog(log)
+	rf.SetSnapshot(snapshot)
 
-	zlog.Debug(rf.logInfo()+"read persist, votedFor=%d, LastLogIndex=%d",
-		rf.GetVotedFor(), rf.GetLastLogIndex())
+	rf.SetLastApplied(headIndex)
+
+	zlog.Debug(rf.logInfo()+"read persist, votedFor=%d",
+		rf.GetVotedFor())
 }
 
 //
@@ -478,6 +499,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		zlog.Debug(rf.logInfo()+"vote for %d", args.CandidateId)
 		reply.VoteGranted = true
 		rf.SetVotedFor(args.CandidateId)
+		// 重置超时flag
+		atomic.StoreInt32(&rf.leaderLost, 0)   
 	} else {
 		reply.VoteGranted = false
 		zlog.Debug(rf.logInfo()+"reject vote for %d", args.CandidateId)
@@ -545,7 +568,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term = rf.GetCurrentTerm()
 	if atomic.LoadInt32(&rf.state) == Leader {
 		isLeader = true
-		rf.appendLog(LogEntry{
+		rf.AppendLog(LogEntry{
 			Term:    rf.GetCurrentTerm(),
 			Command: command,
 		})
@@ -865,7 +888,7 @@ func (rf *Raft) getArgs(server int, logMatched bool, nEntriesCopy int) (
 		LeaderId:     rf.GetMe(),
 		PrevLogIndex: startIndex - 1,
 		PrevLogTerm:  rf.GetLog(startIndex - 1).Term,
-		Entries:      rf.getLogs(startIndex, startIndex+nEntriesCopy),
+		Entries:      rf.GetLogs(startIndex, startIndex+nEntriesCopy),
 		LeaderCommit: rf.GetCommitIndex(),
 	}
 	return
@@ -1002,6 +1025,7 @@ func (rf *Raft) installSnapshotForOne(server int, args *InstallSnapshotArgs, log
 
 	replyCh := make(chan *InstallSnapshotReply)
 	before := time.Now()
+	// 超时重传，保证幂等性
 	go func() {
 		received := int32(0)
 		count := int32(0)
@@ -1236,11 +1260,11 @@ func (rf *Raft) updateEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 		// 截断后面的日志
 		zlog.Debug(rf.logInfo()+"truncate log at %d", args.PrevLogIndex+1)
-		rf.truncateAt(args.PrevLogIndex + 1)
+		rf.TruncateAt(args.PrevLogIndex + 1)
 	}
 
 	// 添加日志
-	rf.appendLog(args.Entries...)
+	rf.AppendLog(args.Entries...)
 	// FIXME: 日志变动后及时更新最新日志索引，否则bug，修改代码
 
 	// 在log变更时进行持久化
