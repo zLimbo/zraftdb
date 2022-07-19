@@ -1,16 +1,19 @@
 package kvraft
 
-import "6.824/porcupine"
-import "6.824/models"
-import "testing"
-import "strconv"
-import "time"
-import "math/rand"
-import "strings"
-import "sync"
-import "sync/atomic"
-import "fmt"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"math/rand"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"6.824/models"
+	"6.824/porcupine"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -42,6 +45,7 @@ func Get(cfg *config, ck *Clerk, key string, log *OpLog, cli int) string {
 	start := time.Now().UnixNano()
 	v := ck.Get(key)
 	end := time.Now().UnixNano()
+	// 递增 op 次数
 	cfg.op()
 	if log != nil {
 		log.Append(porcupine.Operation{
@@ -203,7 +207,8 @@ func partitioner(t *testing.T, cfg *config, ch chan bool, done *int32) {
 // maxraftstate is a positive number, the size of the state for Raft (i.e., log
 // size) shouldn't exceed 8*maxraftstate. If maxraftstate is negative,
 // snapshots shouldn't be used.
-func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliable bool, crash bool, partitions bool, maxraftstate int, randomkeys bool) {
+func GenericTest(t *testing.T, part string, nclients int, nservers int,
+	unreliable bool, crash bool, partitions bool, maxraftstate int, randomkeys bool) {
 
 	title := "Test: "
 	if unreliable {
@@ -250,7 +255,8 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 		// log.Printf("Iteration %v\n", i)
 		atomic.StoreInt32(&done_clients, 0)
 		atomic.StoreInt32(&done_partitioner, 0)
-		go spawn_clients_and_wait(t, cfg, nclients, func(cli int, myck *Clerk, t *testing.T) {
+
+		fn := func(cli int, myck *Clerk, t *testing.T) {
 			j := 0
 			defer func() {
 				clnts[cli] <- j
@@ -268,6 +274,7 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 				}
 				nv := "x " + strconv.Itoa(cli) + " " + strconv.Itoa(j) + " y"
 				if (rand.Int() % 1000) < 500 {
+					// 0.5
 					// log.Printf("%d: client new append %v\n", cli, nv)
 					Append(cfg, myck, key, nv, opLog, cli)
 					if !randomkeys {
@@ -275,11 +282,13 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 					}
 					j++
 				} else if randomkeys && (rand.Int()%1000) < 100 {
+					// 0.5 * 0.1 = 0.1
 					// we only do this when using random keys, because it would break the
 					// check done after Get() operations
 					Put(cfg, myck, key, nv, opLog, cli)
 					j++
 				} else {
+					// 1 - 0.5 - 0.1 = 0.4
 					// log.Printf("%d: client new get %v\n", cli, key)
 					v := Get(cfg, myck, key, opLog, cli)
 					// the following check only makes sense when we're not using random keys
@@ -288,7 +297,8 @@ func GenericTest(t *testing.T, part string, nclients int, nservers int, unreliab
 					}
 				}
 			}
-		})
+		}
+		go spawn_clients_and_wait(t, cfg, nclients, fn)
 
 		if partitions {
 			// Allow the clients to perform some operations without interruption
