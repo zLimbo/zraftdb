@@ -1,6 +1,10 @@
 # zpbft
 
-## 实验代码介绍
+## zraft 实验
+
+> TODO
+
+## zpbft 实验
 
 本实验是一个简单的分布式系统，节点有三种角色：master、server、client。master负责登记server的注册信息（地址和公钥），并将所有server信息发给每个节点，然后server间互相建立P2P连接，等待client的请求到达。Client也需要连接master获取server集群信息，当用户输入命令后，构建请求发给server中的leader，由leader发起共识，在集群中达成一致后，执行该命令，这样所有的server将保持一致的副本状态（每个server拥有独自的kv数据库，但只要按同样顺序执行同样的命令序列，数据库的状态将保持一致）。
 
