@@ -1,4 +1,4 @@
-# zraft实验和zpbft实验
+# LAB: zraft & zpbft
 
 ## zraft 实验
 
