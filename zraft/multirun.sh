@@ -3,7 +3,7 @@
 maddr=$1
 peerNum=$2
 
-python3 run.py $peerNum
+python3 genports.py $peerNum
 
 ports=($(cat ports.txt))
 
